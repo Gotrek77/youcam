@@ -1,29 +1,58 @@
 PREFIX ?= $(HOME)/.local
-LIBDIR := $(PREFIX)/share/youcam
 BINDIR := $(PREFIX)/bin
 APPDIR := $(PREFIX)/share/applications
-SOURCES := youcam.py logic.py media.py portal.py region.py
+ICONDIR := $(PREFIX)/share/icons/hicolor
+PKGS := gtk+-3.0 gstreamer-1.0 gstreamer-pbutils-1.0
+CFLAGS ?= -O2
+CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
+LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
-.PHONY: run test smoke-test install uninstall
+CORE := geometry.o support.o prefs.o
+MEDIA := writer.o audio.o
+APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
+       recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
+ICON_SIZES := 16 32 48 128 256 512
 
-run:
-	python3 youcam.py
+.PHONY: all test smoke-test install uninstall clean
 
-test:
-	python3 logic.py
-	python3 test_media.py
+all: youcam
 
-smoke-test:
-	python3 youcam.py --smoke-test
+youcam: $(APP)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+tests: tests.o $(CORE)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+test-media: test_media.o $(MEDIA) $(CORE)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+make-icon: make_icon.o
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+$(APP) tests.o test_media.o: youcam.h
+
+test: tests test-media
+	./tests
+	./test-media
+
+smoke-test: youcam
+	YOUCAM_CONFIG=$$(mktemp -u)/prefs.ini ./youcam --smoke-test
+
+icons: make-icon
+	./make-icon icons $(ICON_SIZES)
+	touch icons
 
 # The desktop file gives the portal an app id, which global shortcuts require.
-install:
-	install -Dm644 -t $(LIBDIR) $(SOURCES)
-	mkdir -p $(BINDIR)
-	printf '#!/bin/sh\nexec python3 %s/youcam.py "$$@"\n' "$(LIBDIR)" > $(BINDIR)/youcam
-	chmod 755 $(BINDIR)/youcam
+install: youcam icons
+	install -Dm755 youcam $(BINDIR)/youcam
+	for s in $(ICON_SIZES); do install -Dm644 icons/youcam-$$s.png $(ICONDIR)/$${s}x$${s}/apps/youcam.png; done
 	sed 's|@BINDIR@|$(BINDIR)|' app.youcam.YouCam.desktop | install -Dm644 /dev/stdin $(APPDIR)/app.youcam.YouCam.desktop
 	-update-desktop-database $(APPDIR)
+	-gtk-update-icon-cache -q -t $(ICONDIR)
 
 uninstall:
-	rm -rf $(LIBDIR) $(BINDIR)/youcam $(APPDIR)/app.youcam.YouCam.desktop
+	rm -f $(BINDIR)/youcam $(APPDIR)/app.youcam.YouCam.desktop
+	for s in $(ICON_SIZES); do rm -f $(ICONDIR)/$${s}x$${s}/apps/youcam.png; done
+
+clean:
+	rm -rf *.o youcam tests test-media make-icon icons

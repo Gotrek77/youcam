@@ -2,3 +2,9 @@
 build/
 .DS_Store
 __pycache__/
+linux/*.o
+linux/youcam
+linux/tests
+linux/test-media
+linux/make-icon
+linux/icons/
