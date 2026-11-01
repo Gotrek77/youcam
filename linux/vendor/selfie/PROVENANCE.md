@@ -11,5 +11,5 @@ https://storage.googleapis.com/mediapipe-assets/Model%20Card%20MediaPipe%20Selfi
 Downloaded 2026-11-01. The `.ysm` files are converted from these by
 `tools/convert_selfie.py` (weights dequantized to float32, unchanged otherwise):
 
-    python3 tools/convert_selfie.py vendor/selfie/selfie_segmenter_landscape.tflite vendor/selfie/selfie_landscape.ysm --norm <unit|signed>
-    python3 tools/convert_selfie.py vendor/selfie/selfie_segmenter.tflite vendor/selfie/selfie_square.ysm --norm <unit|signed>
+    python3 tools/convert_selfie.py vendor/selfie/selfie_segmenter_landscape.tflite vendor/selfie/selfie_landscape.ysm --norm unit
+    python3 tools/convert_selfie.py vendor/selfie/selfie_segmenter.tflite vendor/selfie/selfie_square.ysm --norm unit
