@@ -302,12 +302,17 @@ void area_overlay_set_on_change(void (*cb)(GdkMonitor *m, rect local));
 void status_icon_init(void (*on_activate)(int x, int y));
 void status_icon_update(const char *icon_name, const char *tooltip);
 
-/* --------------------------------------------------------------- app.c --- */
+/* ---------------------------------------------------------- mutter_cast.c --- */
 
-/* Capture exclusion: on macOS ScreenCaptureKit excludes YouCam's own windows
- * except the camera. The portal cannot do that; this is the single place a
- * strategy will plug in. Called whenever the panel or area guides move. */
-void capture_exclusion_update(void);
+/* Windows with this role stay out of recordings (see mutter_cast.c). */
+#define CAPTURE_HIDDEN_ROLE "youcam-hidden"
+
+int mutter_cast_available(void);
+int mutter_monitor_rect(GVariant *state, const char *connector, int out[4]);
+void mutter_cast_start(const char *connector, screencast_ready ready, portal_error error, void *ud);
+void mutter_cast_stop(const char *session);
+
+/* --------------------------------------------------------------- app.c --- */
 
 void app_startup(GtkApplication *gapp, int smoke_test);
 void app_reopen(void);

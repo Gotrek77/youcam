@@ -17,6 +17,7 @@ static struct {
     recording_phase phase;
     writer *movie;
     char *session;
+    int mutter;               /* The session is Mutter's (capture exclusion), not the portal's. */
     char *monitor;            /* Name of the monitor being recorded. */
     rect monitor_geometry;
     rect crop;
@@ -58,16 +59,22 @@ static gboolean tick(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+static void close_session(void) {
+    if (R.mutter) mutter_cast_stop(R.session);
+    else portal_close_session(R.session);
+    g_free(R.session);
+    R.session = NULL;
+}
+
+static void close_fd(int fd) { if (fd >= 0) close(fd); }   /* Mutter streams come without one. */
+
 static void complete_stop(void) {
     if (R.timer) g_source_remove(R.timer);
     R.timer = 0;
-    portal_close_session(R.session);
-    g_free(R.session);
-    R.session = NULL;
+    close_session();
     R.movie = NULL;
     R.phase = PHASE_IDLE;
     audio_monitor("recording", 0);
-    capture_exclusion_update();
     changed();
 }
 
@@ -120,7 +127,7 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
     (void)ud;
     R.session = g_strdup(session);
     if (R.cancel_start) {
-        close(fd);
+        close_fd(fd);
         R.cancel_start = 0;
         complete_stop();
         return;
@@ -130,30 +137,31 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
                         (x != (int)R.monitor_geometry.x || y != (int)R.monitor_geometry.y);
     if (wrong_monitor && !R.retried) {
         /* The remembered monitor is not the one asked for: ask again. */
-        close(fd);
-        portal_close_session(R.session);
-        g_free(R.session);
-        R.session = NULL;
+        close_fd(fd);
+        close_session();
         R.retried = 1;
         prefs_set_string(&Prefs.restore_token, NULL);
         begin();
         return;
     }
-    prefs_set_string(&Prefs.restore_token, token);
-    prefs_save();
+    if (token) {   /* Only the portal hands one back. */
+        prefs_set_string(&Prefs.restore_token, token);
+        prefs_save();
+    }
 
     GstElement *mic = NULL;
     if (audio_has_audio()) {
         mic = audio_create_source();
         if (!mic) {
-            close(fd);
+            close_fd(fd);
             report("The selected microphone is not available. Select another microphone or No Audio.");
             return;
         }
     }
     char *path = recording_next_path(recordings_dir(), time(NULL), Prefs.container);
-    char *video = g_strdup_printf(
-        "pipewiresrc fd=%d path=%u do-timestamp=true always-copy=true keepalive-time=1000", fd, node);
+    char *video = fd >= 0
+        ? g_strdup_printf("pipewiresrc fd=%d path=%u do-timestamp=true always-copy=true keepalive-time=1000", fd, node)
+        : g_strdup_printf("pipewiresrc path=%u do-timestamp=true always-copy=true keepalive-time=1000", node);
     GError *err = NULL;
     audio_monitor("recording", 1);
     R.movie = writer_start(path, video, mic, R.has_crop ? &R.crop : NULL, 1,
@@ -162,7 +170,7 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
     g_free(path);
     if (!R.movie) {
         if (mic) gst_object_unref(mic);
-        close(fd);
+        close_fd(fd);
         char *msg = g_strdup(err ? err->message : "The recording could not start.");
         g_clear_error(&err);
         report(msg);
@@ -171,12 +179,13 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
     }
     R.phase = PHASE_RECORDING;
     R.timer = g_timeout_add(TICK_MS, tick, NULL);
-    capture_exclusion_update();
     changed();
 }
 
 static void begin(void) {
-    portal_screencast_start(Prefs.restore_token, screen_ready, screen_failed, NULL);
+    R.mutter = mutter_cast_available();
+    if (R.mutter) mutter_cast_start(R.monitor, screen_ready, screen_failed, NULL);
+    else portal_screencast_start(Prefs.restore_token, screen_ready, screen_failed, NULL);
 }
 
 void recording_start(GdkMonitor *monitor, const rect *local) {

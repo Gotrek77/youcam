@@ -148,6 +148,7 @@ void region_select(void (*done)(GdkMonitor *m, const rect *local)) {
         pw->monitor = gdk_display_get_monitor(d, i);
         pw->win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
         GtkWindow *win = GTK_WINDOW(pw->win);
+        gtk_window_set_role(win, CAPTURE_HIDDEN_ROLE);   /* Kept out of recordings. */
         gtk_window_set_title(win, "Select Recording Area");
         gtk_window_set_decorated(win, FALSE);
         gtk_window_set_keep_above(win, TRUE);

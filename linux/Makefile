@@ -1,13 +1,14 @@
 PREFIX ?= $(HOME)/.local
 BINDIR := $(PREFIX)/bin
 APPDIR := $(PREFIX)/share/applications
+EXTDIR := $(PREFIX)/share/gnome-shell/extensions/youcam-capture-exclusion@youcam.app
 ICONDIR := $(PREFIX)/share/icons/hicolor
 PKGS := gtk+-3.0 gstreamer-1.0 gstreamer-pbutils-1.0
 CFLAGS ?= -O2
 CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
-CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o
+CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o
 MEDIA := writer.o audio.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
@@ -57,10 +58,13 @@ install: youcam icons
 	for s in $(ICON_SIZES); do install -Dm644 icons/youcam-$$s.png $(ICONDIR)/$${s}x$${s}/apps/youcam.png; done
 	sed 's|@BINDIR@|$(BINDIR)|' app.youcam.YouCam.desktop | install -Dm644 /dev/stdin $(APPDIR)/app.youcam.YouCam.desktop
 	-update-desktop-database $(APPDIR)
+	rm -rf $(EXTDIR)
+	install -Dm644 -t $(EXTDIR) gnome-extension/metadata.json gnome-extension/extension.js
 	-gtk-update-icon-cache -q -t $(ICONDIR)
 
 uninstall:
 	rm -f $(BINDIR)/youcam $(APPDIR)/app.youcam.YouCam.desktop
+	rm -rf $(EXTDIR)
 	for s in $(ICON_SIZES); do rm -f $(ICONDIR)/$${s}x$${s}/apps/youcam.png; done
 
 clean:

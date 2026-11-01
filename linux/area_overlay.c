@@ -34,6 +34,7 @@ static rect global_selection(void) {
 static GtkWidget *overlay_window(const char *title) {
     GtkWidget *w = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     GtkWindow *win = GTK_WINDOW(w);
+    gtk_window_set_role(win, CAPTURE_HIDDEN_ROLE);   /* Kept out of recordings. */
     gtk_window_set_title(win, title);
     gtk_window_set_decorated(win, FALSE);
     gtk_window_set_keep_above(win, TRUE);
@@ -97,7 +98,6 @@ static void update_frames(void) {
         gtk_window_move(GTK_WINDOW(O.handles[c]), (int)round(x - HANDLE_SIZE / 2.0),
                         (int)round(y - HANDLE_SIZE / 2.0));
     }
-    capture_exclusion_update();
 }
 
 static void update_handle_visibility(void) {
@@ -200,7 +200,6 @@ void area_overlay_hide(void) {
     if (O.shade) gtk_widget_destroy(O.shade);
     O.shade = NULL;
     O.monitor = NULL;
-    capture_exclusion_update();
 }
 
 void area_overlay_set_editable(int editable) {

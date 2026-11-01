@@ -332,6 +332,41 @@ static void test_center_stage(void) {
     g_free(gray);
 }
 
+/* Linux addition: where Mutter's RecordArea must look for a monitor. */
+static GVariant *display_state(guint32 layout, guint32 transform, const char *mode_flags) {
+    char *text = g_strdup_printf(
+        "(uint32 1,"
+        " [(('eDP-1', 'BOE', 'X', '0'), [('2560x1600', 2560, 1600, 60.0, 1.25, [1.0, 1.25], {%s}),"
+        "                               ('1920x1200', 1920, 1200, 60.0, 1.0, [1.0], @a{sv} {})], @a{sv} {}),"
+        "  (('HDMI-1', 'X', 'Y', '1'), [('1920x1080', 1920, 1080, 60.0, 1.0, [1.0], {'is-current': <true>})], @a{sv} {})],"
+        " [(0, 0, 1.25, uint32 0, true, [('eDP-1', 'BOE', 'X', '0')], @a{sv} {}),"
+        "  (2048, 0, 1.0, uint32 %u, false, [('HDMI-1', 'X', 'Y', '1')], @a{sv} {})],"
+        " {'layout-mode': <uint32 %u>})", mode_flags, transform, layout);
+    GVariant *v = g_variant_ref_sink(g_variant_new_parsed(text));
+    g_free(text);
+    return v;
+}
+
+static void test_mutter_monitor_rect(void) {
+    int r[4];
+    GVariant *s = display_state(1, 0, "'is-current': <true>");
+    EXPECT(mutter_monitor_rect(s, "eDP-1", r) && r[0] == 0 && r[1] == 0 && r[2] == 2048 && r[3] == 1280,
+           "A scaled monitor is recorded in logical pixels");
+    EXPECT(mutter_monitor_rect(s, "HDMI-1", r) && r[0] == 2048 && r[2] == 1920 && r[3] == 1080,
+           "A second monitor keeps its stage origin");
+    EXPECT(!mutter_monitor_rect(s, "DP-9", r), "An unknown connector is not recorded");
+    g_variant_unref(s);
+    s = display_state(1, 1, "'is-current': <true>");
+    EXPECT(mutter_monitor_rect(s, "HDMI-1", r) && r[2] == 1080 && r[3] == 1920, "A rotated monitor swaps its size");
+    g_variant_unref(s);
+    s = display_state(2, 0, "'is-current': <true>");
+    EXPECT(mutter_monitor_rect(s, "eDP-1", r) && r[2] == 2560 && r[3] == 1600, "Physical layouts are not scaled");
+    g_variant_unref(s);
+    s = display_state(1, 0, "'is-preferred': <true>");
+    EXPECT(!mutter_monitor_rect(s, "eDP-1", r), "A monitor without a current mode is not recorded");
+    g_variant_unref(s);
+}
+
 int main(void) {
     test_overlay_geometry();
     test_area_corners();
@@ -342,6 +377,7 @@ int main(void) {
     test_prefs();
     test_transparency();
     test_center_stage();
+    test_mutter_monitor_rect();
     printf("Passed %d logic checks.\n", Checks);
     return 0;
 }

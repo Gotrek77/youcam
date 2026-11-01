@@ -68,9 +68,14 @@ Markus (MIT license), vendored in `vendor/pico/` with its license.
   camera above other windows and remember where it was.
 - The menu bar icon is a StatusNotifierItem: GNOME shows it only with the
   AppIndicator extension.
-- macOS excludes YouCam's panel and guides from recordings. The portal cannot
-  exclude windows: with a selected area they stay outside the crop, but a
-  whole-screen recording shows the panel if it is open.
+- macOS excludes YouCam's panel and guides from recordings. On GNOME this
+  needs the small **YouCam Capture Exclusion** Shell extension, which `make
+  install` copies: log out and in once, then run `gnome-extensions enable
+  youcam-capture-exclusion@youcam.app`. While it is active YouCam records
+  through Mutter's screen cast instead of the portal (no screen-sharing
+  dialog) and the panel and guides stay on screen but out of the movie.
+  Without it, a whole-screen recording shows the panel if it is open.
+  `YOUCAM_CAPTURE=portal` or `=mutter` forces either path.
 - Center Stage finds faces with pico instead of Apple's Vision framework, and
   never uses a camera's own Center Stage (macOS's Continuity Camera path).
 - Menu keyboard equivalents (Command-H, Command-1…) are not available: the

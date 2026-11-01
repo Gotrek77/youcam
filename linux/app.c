@@ -40,14 +40,6 @@ static struct {
     guint save_timer;
 } App;
 
-/* Capture exclusion. On macOS the recording filter drops every YouCam window
- * except the camera, so the panel, menus and area guides never appear in a
- * movie. The ScreenCast portal records whole monitors and cannot exclude
- * windows. With a selected area the guides lie outside the crop anyway; this
- * hook is where a strategy for whole-screen recordings will be added. It is
- * called whenever the panel or the guides appear, move or disappear. */
-void capture_exclusion_update(void) {}
-
 /* ------------------------------------------------------------- geometry */
 
 static GdkMonitor *camera_monitor(void) {
@@ -304,7 +296,6 @@ void app_toggle_panel(void) {
         audio_monitor("panel", 1);
         update_ui();
     }
-    capture_exclusion_update();
 }
 
 /* Launching YouCam again brings it back (applicationShouldHandleReopen). */
@@ -811,7 +802,9 @@ void app_startup(GtkApplication *gapp, int smoke) {
     refresh_area_overlay();
     update_ui();
     if (smoke) {
-        g_print("Screen capture: through the desktop portal (asked when recording starts)\n");
+        g_print("Screen capture: %s\n", mutter_cast_available()
+                    ? "through Mutter, without YouCam's panel and guides (Capture Exclusion extension)"
+                    : "through the desktop portal (asked when recording starts)");
         g_print("Microphone: %s\n", audio_name());
         g_timeout_add_seconds(SMOKE_TEST_S, smoke_quit, NULL);
     } else {

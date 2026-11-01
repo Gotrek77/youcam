@@ -259,12 +259,6 @@ static gboolean on_press(GtkWidget *w, GdkEventButton *ev, gpointer d) {
     return FALSE;
 }
 
-static gboolean on_configure(GtkWidget *w, GdkEvent *ev, gpointer d) {
-    (void)w; (void)ev; (void)d;
-    capture_exclusion_update();
-    return FALSE;
-}
-
 static GtkWidget *icon_button(const char *icon, const char *label) {
     GtkWidget *b = gtk_button_new_from_icon_name(icon, GTK_ICON_SIZE_BUTTON);
     gtk_widget_set_tooltip_text(b, label);
@@ -284,6 +278,7 @@ GtkWidget *panel_create(void) {
     P.shown_phase = -1;
     P.win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     GtkWindow *w = GTK_WINDOW(P.win);
+    gtk_window_set_role(w, CAPTURE_HIDDEN_ROLE);   /* Kept out of recordings. */
     gtk_window_set_title(w, "YouCam Recording Controls");
     gtk_window_set_decorated(w, FALSE);
     gtk_window_set_keep_above(w, TRUE);
@@ -346,7 +341,6 @@ GtkWidget *panel_create(void) {
     g_signal_connect(P.area, "clicked", G_CALLBACK(on_area), NULL);
     gtk_widget_add_events(P.win, GDK_BUTTON_PRESS_MASK);
     g_signal_connect(P.win, "button-press-event", G_CALLBACK(on_press), NULL);
-    g_signal_connect(P.win, "configure-event", G_CALLBACK(on_configure), NULL);
     g_signal_connect(P.win, "delete-event", G_CALLBACK(gtk_true), NULL);
     gtk_widget_show_all(bg);
     return P.win;
