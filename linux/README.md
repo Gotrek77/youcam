@@ -48,7 +48,9 @@ need. `make uninstall` removes everything `make install` added.
 Global shortcuts: **Control–Alt–Super–R** starts/stops; **Control–Alt–Super–P**
 pauses/resumes (GNOME asks to confirm them once).
 
-Run checks with `make test` and `make smoke-test`.
+Run checks with `make test` and `make smoke-test`. `./youcam --record-test 6` makes a real 6-second
+recording through the portal (after one recording has saved the monitor choice, no dialog appears) and
+quits; inspect the movie on the Desktop with `ffprobe`.
 
 Face detection uses [pico](https://github.com/nenadmarkus/pico) by Nenad
 Markus (MIT license), vendored in `vendor/pico/` with its license.
