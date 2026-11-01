@@ -17,6 +17,7 @@ static gboolean record_test_stop(gpointer data) { (void)data; app_quit(); return
 
 static gboolean record_test_start(gpointer data) {
     (void)data;
+    if (!app_panel_visible()) app_toggle_panel();   /* Shows whether it stays out of the movie. */
     app_toggle_recording();
     g_timeout_add_seconds(RecordTestS, record_test_stop, NULL);
     return FALSE;

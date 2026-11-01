@@ -49,6 +49,8 @@ export default class CaptureExclusionExtension extends Extension {
             this);
         this._afterPaintView = global.stage.connect_after('paint-view', () => (screenFramebuffers = []));
         global.display.connectObject('window-created', (_display, window) => this._track(window), this);
+        // "map" comes before the window's first paint; "shown" only after it.
+        global.window_manager.connectObject('map', (_wm, actor) => this._update(actor.meta_window), this);
         for (const actor of global.get_window_actors())
             this._track(actor.meta_window);
         if (DEBUG) {
@@ -68,6 +70,7 @@ export default class CaptureExclusionExtension extends Extension {
         global.stage.disconnect(this._afterPaintView);
         screenFramebuffers = [];
         global.display.disconnectObject(this);
+        global.window_manager.disconnectObject(this);
         for (const actor of global.get_window_actors()) {
             actor.meta_window.disconnectObject(this);
             actor.remove_effect_by_name(EFFECT_NAME);
