@@ -364,6 +364,31 @@ static GtkWidget *add_check(GtkWidget *menu, const char *label, int active, int 
     return item;
 }
 
+/* A menu item hosting a slider. GTK delivers the pointer events to the menu
+ * item's own window, so the slider inside never sees them: forward them.
+ * Returning TRUE also keeps the menu open while dragging. */
+static gboolean forward_to_slider(GtkWidget *item, GdkEvent *event, gpointer slider) {
+    (void)item;
+    gtk_widget_event(GTK_WIDGET(slider), event);
+    return TRUE;
+}
+
+static void find_scale(GtkWidget *w, gpointer found) {
+    if (*(GtkWidget **)found) return;
+    if (GTK_IS_SCALE(w)) *(GtkWidget **)found = w;
+    else if (GTK_IS_CONTAINER(w)) gtk_container_foreach(GTK_CONTAINER(w), find_scale, found);
+}
+
+static void add_slider_item(GtkWidget *menu, GtkWidget *content) {
+    GtkWidget *holder = gtk_menu_item_new(), *slider = NULL;
+    gtk_container_add(GTK_CONTAINER(holder), content);
+    find_scale(content, &slider);
+    const char *events[] = {"button-press-event", "button-release-event", "motion-notify-event"};
+    for (size_t i = 0; slider && i < G_N_ELEMENTS(events); i++)
+        g_signal_connect(holder, events[i], G_CALLBACK(forward_to_slider), slider);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), holder);
+}
+
 static void add_separator(GtkWidget *menu) {
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
 }
@@ -523,11 +548,7 @@ static void build_transparency_menu(GtkWidget *menu) {
     atk_object_set_name(gtk_widget_get_accessible(slider), "Camera transparency in percent");
     g_signal_connect(slider, "value-changed", G_CALLBACK(transparency_slider), value);
     gtk_fixed_put(GTK_FIXED(fixed), slider, 12, 33);
-    GtkWidget *holder = gtk_menu_item_new();
-    gtk_container_add(GTK_CONTAINER(holder), fixed);
-    g_signal_connect(holder, "button-press-event", G_CALLBACK(gtk_true), NULL);
-    g_signal_connect(holder, "button-release-event", G_CALLBACK(gtk_true), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), holder);
+    add_slider_item(menu, fixed);
     add_separator(menu);
     GtkWidget *save = add_check(menu, "Apply Transparency to Saved Video", Prefs.record_transparency, 0, 1);
     g_signal_connect(save, "button-release-event", G_CALLBACK(toggle_record_transparency), NULL);
@@ -575,12 +596,7 @@ static void build_audio_menu(GtkWidget *menu) {
         add_choice(menu, name, name, sel && strcmp(sel, name) == 0, !busy, select_audio_name);
     }
     add_separator(menu);
-    GtkWidget *holder = gtk_menu_item_new();
-    gtk_container_add(GTK_CONTAINER(holder), audio_controls_new());
-    /* Keep the menu open while using the slider. */
-    g_signal_connect(holder, "button-press-event", G_CALLBACK(gtk_true), NULL);
-    g_signal_connect(holder, "button-release-event", G_CALLBACK(gtk_true), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), holder);
+    add_slider_item(menu, audio_controls_new());
     add_separator(menu);
     add_item(menu, "Sound Settings…", open_sound_settings, 1);
     g_signal_connect(menu, "map", G_CALLBACK(audio_menu_mapped), NULL);
