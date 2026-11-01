@@ -1,8 +1,8 @@
-#include <locale.h>
 /* Logic checks ported from the Swift tests in Tests/ (the parts that are not AppKit UI).
  * Coordinates are GDK's (top-left origin): the macOS cases are mirrored
  * vertically inside a 1440x900 display. */
 
+#include <locale.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

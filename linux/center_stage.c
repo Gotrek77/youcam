@@ -188,7 +188,7 @@ int center_stage_animating(void) { return g_get_monotonic_time() - S.start < ANI
 stage_transform center_stage_now(double w, double h, camera_shape shape, int mirrored) {
     stage_transform to = stage_transform_for(S.has_face ? &S.face : NULL, w, h, shape, mirrored);
     double p = fmin(1, (g_get_monotonic_time() - S.start) / (double)ANIMATION_US);
-    p = 1 - pow(1 - p, 3);   /* ponytail: cubic ease-out, close to CoreAnimation's easeOut curve. */
+    p = 1 - pow(1 - p, 3);   /* Cubic ease-out, close to CoreAnimation's easeOut. */
     S.shown = (stage_transform){S.from.zoom + (to.zoom - S.from.zoom) * p,
                                 S.from.x + (to.x - S.from.x) * p, S.from.y + (to.y - S.from.y) * p};
     return S.shown;
