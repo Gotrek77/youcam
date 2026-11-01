@@ -167,6 +167,7 @@ void seg_add(const float *a, const float *b, float *out, size_t n) {
 #define YSM_MAX_LAYERS 1024
 #define YSM_MAX_DIM 4096
 #define YSM_MAX_ELEMENTS (1 << 24)
+#define YSM_MAX_TOTAL_ELEMENTS (1 << 25)   /* The real models need 7.5M. */
 #define YSM_MAX_KERNEL 15
 #define YSM_LAYER_FIELDS 11
 
@@ -253,6 +254,7 @@ static const char *read_tensors(segment_model *m, reader *r, guint32 count) {
     m->dims = g_new0(seg_dims, count);
     m->act = g_new0(float *, count);
     m->tensor_count = count;
+    guint64 total = 0;
     for (guint32 t = 0; t < count; t++) {
         guint32 h = read_u32(r), w = read_u32(r), c = read_u32(r);
         if (!r->ok) return "truncated tensors";
@@ -260,7 +262,13 @@ static const char *read_tensors(segment_model *m, reader *r, guint32 count) {
             (guint64)h * w * c > YSM_MAX_ELEMENTS)
             return "bad tensor shape";
         m->dims[t] = (seg_dims){(int)h, (int)w, (int)c};
-        m->act[t] = g_new0(float, (size_t)h * w * c);
+        total += (guint64)h * w * c;
+    }
+    /* Per-tensor caps are not enough: 1024 maximal tensors would be 64 GiB. */
+    if (total > YSM_MAX_TOTAL_ELEMENTS) return "tensors too large";
+    for (guint32 t = 0; t < count; t++) {
+        m->act[t] = g_try_new0(float, (size_t)m->dims[t].h * m->dims[t].w * m->dims[t].c);
+        if (!m->act[t]) return "out of memory";
     }
     return NULL;
 }

@@ -89,7 +89,24 @@ static int loads(const guint8 *data, size_t size) {
     return ok;
 }
 
+/* 1024 tensors of 4096x4096x1: each within its cap, 64 GiB together. */
+static void test_oversized_total(void) {
+    size_t size = HEADER_SIZE + 12 * 1024;
+    guint8 *d = g_malloc0(size);
+    guint32 header[] = {0, 4096, 4096, 0, 0, 0, 1024, 1, 0, 1};   /* from in_h on */
+    memcpy(d, "YSM1", 4);
+    memcpy(d + 4, header + 1, 8);
+    memcpy(d + 20, header + 5, 20);
+    for (int i = 0; i < 1024; i++) {
+        guint32 shape[] = {4096, 4096, 1};
+        memcpy(d + HEADER_SIZE + 12 * i, shape, 12);
+    }
+    EXPECT(!loads(d, size), "Tensors that are too large together are rejected");
+    g_free(d);
+}
+
 static void test_loader(void) {
+    test_oversized_total();
     for (int v = 0; v < SEG_VARIANTS; v++) {
         size_t size;
         guint8 *d = model_copy(v, &size);

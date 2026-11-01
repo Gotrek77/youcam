@@ -353,6 +353,13 @@ void seg_sigmoid(const float *in, float *out, size_t n);
 void seg_mul_channels(const float *in, const float *scale, seg_dims d, float *out);
 void seg_add(const float *a, const float *b, float *out, size_t n);
 
+typedef struct segment_model segment_model;
+segment_model *segment_load(const guint8 *data, size_t size, GError **err);
+void segment_free(segment_model *m);
+void segment_input_size(const segment_model *m, int *w, int *h);
+/* rgb: packed 8-bit RGB at the input size; mask: person confidence 0...1, input size. */
+void segment_run(segment_model *m, const guint8 *rgb, float *mask);
+
 /* --------------------------------------------------------------- app.c --- */
 
 void app_startup(GtkApplication *gapp, int smoke_test);
@@ -372,13 +379,6 @@ const char *app_area_name(void);
 int app_panel_visible(void);
 void app_quit(void);
 void app_show_message(const char *title, const char *text, GtkMessageType type);
-
-typedef struct segment_model segment_model;
-segment_model *segment_load(const guint8 *data, size_t size, GError **err);
-void segment_free(segment_model *m);
-void segment_input_size(const segment_model *m, int *w, int *h);
-/* rgb: packed 8-bit RGB at the input size; mask: person confidence 0...1, input size. */
-void segment_run(segment_model *m, const guint8 *rgb, float *mask);
 
 /* ---------------------------------------------------------- background.c --- */
 
