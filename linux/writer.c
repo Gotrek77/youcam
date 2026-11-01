@@ -27,6 +27,7 @@ struct writer {
     gint out_w, out_h;          /* Movie size, set from the streaming thread. */
     GstElement *camera;         /* appsrc of the camera layer, or NULL. */
     GstPad *camera_pad;         /* Its compositor pad. */
+    GstElement *outsize;        /* Pins the compositor output to the screen size. */
     int camera_w, camera_h;
 };
 
@@ -44,6 +45,15 @@ static GstPadProbeReturn size_probe(GstPad *pad, GstPadProbeInfo *info, gpointer
     gst_structure_get_int(s, "height", &height);
     g_atomic_int_set(&w->out_h, height);
     g_atomic_int_set(&w->out_w, width);
+    /* A live compositor negotiates on its first timeout, possibly before the
+     * screen pad has data: it then knows no size and picks the minimum (16x16
+     * after x264). PipeWire starts late, so pin the output to the screen. */
+    if (w->outsize && width > 0 && height > 0) {
+        GstCaps *size = gst_caps_new_simple("video/x-raw", "width", G_TYPE_INT, width,
+            "height", G_TYPE_INT, height, "framerate", GST_TYPE_FRACTION, 30, 1, NULL);
+        g_object_set(w->outsize, "caps", size, NULL);
+        gst_caps_unref(size);
+    }
     return GST_PAD_PROBE_OK;
 }
 
@@ -130,6 +140,7 @@ static void complete(writer *w, const char *error) {
     else gst_element_set_state(w->pipeline, GST_STATE_NULL);
     if (w->camera) gst_object_unref(w->camera);
     if (w->camera_pad) gst_object_unref(w->camera_pad);
+    if (w->outsize) gst_object_unref(w->outsize);
     gst_object_unref(w->pipeline);
     if (error) w->cb.failed(error, w->cb.ud);
     else w->cb.finished(w->path, w->cb.ud);
@@ -171,6 +182,7 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
           "appsrc name=camera is-live=true do-timestamp=true format=time "
           "caps=video/x-raw,format=BGRA,width=2,height=2,framerate=0/1 ! videoconvert ! comp.sink_1 "
           "compositor name=comp ignore-inactive-pads=true background=black ! "
+          "capsfilter name=outsize caps=video/x-raw,framerate=30/1 ! "
         : "";
     char *desc = g_strdup_printf(
         "%s ! videoconvert ! videocrop name=crop ! videorate ! video/x-raw,framerate=30/1 ! %s"
@@ -220,6 +232,7 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
         w->camera = gst_bin_get_by_name(GST_BIN(p), "camera");
         GstElement *comp = gst_bin_get_by_name(GST_BIN(p), "comp");
         w->camera_pad = gst_element_get_static_pad(comp, "sink_1");
+        w->outsize = gst_bin_get_by_name(GST_BIN(p), "outsize");
         gst_object_unref(comp);
         g_object_set(w->camera_pad, "alpha", 0.0, "zorder", 1, NULL);
         w->camera_w = w->camera_h = 2;
@@ -241,6 +254,7 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
         gst_element_set_state(p, GST_STATE_NULL);
         if (w->camera) gst_object_unref(w->camera);
         if (w->camera_pad) gst_object_unref(w->camera_pad);
+        if (w->outsize) gst_object_unref(w->outsize);
         gst_object_unref(p);
         g_unlink(path);
         g_free(w->path);
@@ -289,6 +303,7 @@ void writer_cancel(writer *w) {
     gst_element_set_state(w->pipeline, GST_STATE_NULL);
     if (w->camera) gst_object_unref(w->camera);
     if (w->camera_pad) gst_object_unref(w->camera_pad);
+    if (w->outsize) gst_object_unref(w->outsize);
     gst_object_unref(w->pipeline);
     g_unlink(path);
     g_free(path);
