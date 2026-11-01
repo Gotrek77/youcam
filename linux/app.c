@@ -27,7 +27,9 @@ static const char *HelpText =
     "Transparency optionally lets you see through the camera while you work. Adjust it from the "
     "camera menu; Reset Transparency to 0% turns it off. Check Apply Transparency to Saved Video to "
     "use the same transparency in your recordings, or leave it unchecked to keep the recorded camera "
-    "opaque. Both choices are remembered.";
+    "opaque. Both choices are remembered.\n\n"
+    "Center Stage (Follow Face) gently pans and zooms the camera to keep your face centred, in "
+    "the preview and in recordings. Face detection uses pico by Nenad Markus (MIT license).";
 
 static struct {
     GtkApplication *gapp;
@@ -467,7 +469,8 @@ static gboolean layer_tick(gpointer data) {
     }
     cairo_surface_t *s = cairo_image_surface_create_for_data(LayerPixels, CAIRO_FORMAT_ARGB32, cw, ch, stride);
     cairo_t *cr = cairo_create(s);
-    camera_layer_draw(cr, l, x, y, f, Prefs.mirrored, FULL_VIEW);
+    camera_layer_draw(cr, l, x, y, f, Prefs.mirrored,
+                      center_stage_now(l.frame.w, l.frame.h, Prefs.shape, Prefs.mirrored));
     cairo_destroy(cr);
     cairo_surface_flush(s);
     cairo_surface_destroy(s);
@@ -535,6 +538,12 @@ static void toggle_mirror(void) {
     Prefs.mirrored = !Prefs.mirrored;
     prefs_save();
     overlay_queue_draw();
+}
+
+static void toggle_center_stage(void) {
+    Prefs.center_stage = !Prefs.center_stage;
+    prefs_save();
+    if (!Prefs.center_stage) center_stage_reset();
 }
 
 static void reset_position(void) {
@@ -633,6 +642,8 @@ GtkWidget *app_build_menu(void) {
     build_transparency_menu(add_submenu(menu, "Transparency", 1));
     GtkWidget *mirror = add_check(menu, "Mirror Camera", Prefs.mirrored, 0, 1);
     g_signal_connect_swapped(mirror, "activate", G_CALLBACK(toggle_mirror), NULL);
+    GtkWidget *stage = add_check(menu, "Center Stage (Follow Face)", Prefs.center_stage, 0, 1);
+    g_signal_connect_swapped(stage, "activate", G_CALLBACK(toggle_center_stage), NULL);
     add_item(menu, "Move to Bottom Right", reset_position, 1);
     add_separator(menu);
     add_item(menu, "Retry Camera", retry_camera, 1);
@@ -725,6 +736,7 @@ void app_startup(GtkApplication *gapp, int smoke) {
     if (!smoke) portal_register_app();
 
     camera_init(camera_changed, overlay_queue_draw);
+    center_stage_init(overlay_animate);
     audio_init(audio_changed, microphone_lost);
     recording_init(update_ui, recording_error);
     App.cam = overlay_create();

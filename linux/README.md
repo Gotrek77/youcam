@@ -39,6 +39,9 @@ need. `make uninstall` removes everything `make install` added.
   Video** to record the same transparency; leave it unchecked to keep the
   recorded camera opaque. Both choices are remembered, and changes apply
   immediately, including during recording.
+- **Center Stage (Follow Face)** gently pans and zooms the camera to keep
+  your face centred, in the preview and in recordings. It is on by default
+  and remembered.
 - **Show Recording Panel** opens optional controls. **Hide Camera** lets you
   record just the screen; launch YouCam again to bring the camera back.
 
@@ -46,6 +49,9 @@ Global shortcuts: **Control–Alt–Super–R** starts/stops; **Control–Alt–
 pauses/resumes (GNOME asks to confirm them once).
 
 Run checks with `make test` and `make smoke-test`.
+
+Face detection uses [pico](https://github.com/nenadmarkus/pico) by Nenad
+Markus (MIT license), vendored in `vendor/pico/` with its license.
 
 ## Differences from macOS
 
@@ -56,5 +62,7 @@ Run checks with `make test` and `make smoke-test`.
 - macOS excludes YouCam's panel and guides from recordings. The portal cannot
   exclude windows: with a selected area they stay outside the crop, but a
   whole-screen recording shows the panel if it is open.
+- Center Stage finds faces with pico instead of Apple's Vision framework, and
+  never uses a camera's own Center Stage (macOS's Continuity Camera path).
 - Menu keyboard equivalents (Command-H, Command-1…) are not available: the
   camera never takes keyboard focus. The global shortcuts work everywhere.

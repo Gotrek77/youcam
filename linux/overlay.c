@@ -66,6 +66,21 @@ void overlay_apply_shape(void) {
 
 void overlay_queue_draw(void) { if (Win) gtk_widget_queue_draw(Win); }
 
+/* Redraws every display frame while a Center Stage move is animating. */
+static guint AnimationTick;
+
+static gboolean animation_tick(GtkWidget *widget, GdkFrameClock *clock, gpointer data) {
+    (void)clock; (void)data;
+    gtk_widget_queue_draw(widget);
+    if (center_stage_animating()) return G_SOURCE_CONTINUE;
+    AnimationTick = 0;
+    return G_SOURCE_REMOVE;
+}
+
+void overlay_animate(void) {
+    if (Win && !AnimationTick) AnimationTick = gtk_widget_add_tick_callback(Win, animation_tick, NULL, NULL);
+}
+
 static void draw_text(cairo_t *cr, const char *text, const char *font, double alpha,
                       double x, double y, double width, int max_lines) {
     PangoLayout *layout = pango_cairo_create_layout(cr);
@@ -127,7 +142,7 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     }
     const camera_frame *f = camera_current_frame();
     if (!f) return TRUE;
-    camera_paint_frame(cr, f, w, h, Prefs.mirrored, FULL_VIEW);
+    camera_paint_frame(cr, f, w, h, Prefs.mirrored, center_stage_now(w, h, Prefs.shape, Prefs.mirrored));
     return TRUE;
 }
 

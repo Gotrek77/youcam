@@ -11,6 +11,7 @@
 
 #define CAMERA_CORNER_RADIUS 14
 #define HALO_PX 1   /* Grow the copy slightly so no translucent edge shows. */
+#define CAMERA_ASPECT (16.0 / 9.0)
 
 double transparency_normalize(double value) {
     return isfinite(value) ? fmin(TRANSPARENCY_MAX, fmax(0, value)) : 0;
@@ -47,10 +48,10 @@ int camera_layer_clip(camera_layer l, int out_w, int out_h, int *x, int *y, int 
 }
 
 /* Draws the camera (aspect fill, mirrored if asked, shape-masked) into a
- * BGRA canvas whose top-left is at (cx, cy) in output pixels. 'view' is the
- * Center Stage crop of the camera frame in normalized coordinates. */
+ * BGRA canvas whose top-left is at (cx, cy) in output pixels, with the
+ * same Center Stage transform as the camera window. */
 void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera_frame *f,
-                       int mirrored, rect view) {
+                       int mirrored, stage_transform t) {
     cairo_save(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
@@ -67,24 +68,41 @@ void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera
     cairo_close_path(cr);
     cairo_clip(cr);
     cairo_translate(cr, r.x, r.y);
-    camera_paint_frame(cr, f, r.w, r.h, mirrored, view);
+    camera_paint_frame(cr, f, r.w, r.h, mirrored, t);
     cairo_restore(cr);
 }
 
-/* Aspect-fill a camera frame into w x h, using the 'view' crop (normalized
- * camera coordinates; the whole frame is {0,0,1,1}). Shared with the
- * preview so both always show the same picture. */
-void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored, rect view) {
+/* The video canvas behind a w x h mask: 16:9, covering the mask (as the
+ * preview layer bounds in CameraOverlay.swift). A circle or square sees the
+ * whole sensor width, which leaves room to pan sideways. */
+void stage_canvas(double w, double h, double *cw, double *ch) {
+    if (w / h < CAMERA_ASPECT) {
+        *ch = h;
+        *cw = h * CAMERA_ASPECT;
+    } else {
+        *cw = w;
+        *ch = w / CAMERA_ASPECT;
+    }
+}
+
+/* Paints a camera frame into a w x h mask: aspect fill into the 16:9
+ * canvas centred on the mask, then the Center Stage shift and zoom around
+ * the mask centre. Shared with the preview so both show the same picture. */
+void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored,
+                        stage_transform t) {
+    double cw, ch;
+    stage_canvas(w, h, &cw, &ch);
     cairo_save(cr);
-    double vw = view.w * f->width, vh = view.h * f->height;
-    double scale = fmax(w / vw, h / vh);
+    cairo_translate(cr, w / 2 + t.x * w, h / 2 + t.y * h);
+    cairo_scale(cr, t.zoom, t.zoom);
+    cairo_translate(cr, -cw / 2, -ch / 2);
     if (mirrored) {
-        cairo_translate(cr, w, 0);
+        cairo_translate(cr, cw, 0);
         cairo_scale(cr, -1, 1);
     }
-    cairo_translate(cr, (w - vw * scale) / 2, (h - vh * scale) / 2);
+    double scale = fmax(cw / f->width, ch / f->height);
+    cairo_translate(cr, (cw - f->width * scale) / 2, (ch - f->height * scale) / 2);
     cairo_scale(cr, scale, scale);
-    cairo_translate(cr, -view.x * f->width, -view.y * f->height);
     cairo_surface_t *image = cairo_image_surface_create_for_data(
         f->data, CAIRO_FORMAT_RGB24, f->width, f->height, f->stride);
     cairo_set_source_surface(cr, image, 0, 0);

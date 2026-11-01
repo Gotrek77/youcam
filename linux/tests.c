@@ -167,6 +167,7 @@ static void test_prefs(void) {
     prefs_load();
     EXPECT(Prefs.shape == SHAPE_CIRCLE && Prefs.mirrored && Prefs.width == OVERLAY_DEFAULT_WIDTH,
            "Defaults: circle, mirrored, 280 points");
+    EXPECT(Prefs.center_stage, "Center Stage is enabled by default");
     Prefs.shape = SHAPE_RECTANGLE;
     Prefs.gain_db = -6;
     Prefs.has_origin = 1; Prefs.origin_x = 12; Prefs.origin_y = 34;
@@ -174,6 +175,7 @@ static void test_prefs(void) {
     prefs_set_string(&Prefs.restore_token, "token");
     Prefs.transparency = 0.55;
     Prefs.record_transparency = 1;
+    Prefs.center_stage = 0;
     prefs_save();
     memset(&Prefs, 0, sizeof(Prefs));
     prefs_load();
@@ -183,6 +185,7 @@ static void test_prefs(void) {
            rect_equal(Prefs.area.local, (rect){10, 20, 300, 200}), "The recording area survives a reload");
     EXPECT(strcmp(Prefs.restore_token, "token") == 0, "The shared monitor is remembered");
     EXPECT(Prefs.transparency == 0.55 && Prefs.record_transparency, "Both transparency choices are remembered");
+    EXPECT(!Prefs.center_stage, "Turning Center Stage off is remembered");
     recording_area missing = prefs_area_validate(Prefs.area, NULL);
     EXPECT(missing.mode == AREA_WHOLE_SCREEN, "An area on a disconnected display falls back to the whole screen");
     g_file_set_contents(path, "[youcam]\nwidth=banana\ncameraPreviewTransparency=5\n", -1, NULL);
@@ -233,7 +236,7 @@ static void test_transparency(void) {
             EXPECT(camera_layer_clip(cl, 320, 180, &x, &y, &w, &h), "The layer is inside the movie");
             cairo_surface_t *img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
             cairo_t *cr = cairo_create(img);
-            camera_layer_draw(cr, cl, x, y, &f, mirrored, FULL_VIEW);
+            camera_layer_draw(cr, cl, x, y, &f, mirrored, STAGE_IDENTITY);
             cairo_destroy(cr);
             cairo_surface_flush(img);
             guint8 *p = cairo_image_surface_get_data(img);
@@ -249,6 +252,75 @@ static void test_transparency(void) {
     g_free(f.data);
 }
 
+/* Center Stage (PR antirez/youcam#1): soft clamp, zoom, smoothing, the
+ * transform, no black bars at the extremes, face loss, and pico. */
+static void test_center_stage(void) {
+    EXPECT(stage_soft_clamp(10, 0.4) == 0, "No pan room means no pan");
+    EXPECT(near(stage_soft_clamp(0, 50), 0) && fabs(stage_soft_clamp(1000, 50)) < 50 &&
+           stage_soft_clamp(-1000, 50) > -50, "The soft clamp never passes the limit");
+    EXPECT(near(stage_soft_clamp(10, 50), 50 * tanh(10 / 50.0 * 0.95)), "The soft clamp follows tanh");
+
+    stage_face far = {0.5, 0.5, 0.2, 0.3}, close = {0.5, 0.5, 0.6, 0.9};
+    EXPECT(near(stage_zoom(&far, SHAPE_RECTANGLE), 1.28) && near(stage_zoom(&far, SHAPE_CIRCLE), 1.10),
+           "Base zoom: 1.28 in a rectangle, 1.10 otherwise");
+    EXPECT(near(stage_zoom(&close, SHAPE_CIRCLE), 1.02), "Zoom backs off to 1.02 when close");
+
+    stage_face s, f = {0.5, 0.5, 0.2, 0.3};
+    EXPECT(stage_smooth(&s, 0, f) && near(s.cx, 0.5), "The first face is taken as is");
+    EXPECT(!stage_smooth(&s, 1, (stage_face){0.505, 0.505, 0.21, 0.3}), "Small movements are ignored");
+    EXPECT(stage_smooth(&s, 1, (stage_face){0.6, 0.5, 0.2, 0.3}) && near(s.cx, 0.5 + 0.1 * 0.22),
+           "Larger movements are followed smoothly");
+
+    stage_transform t = stage_transform_for(NULL, 280, 280, SHAPE_CIRCLE, 1);
+    EXPECT(t.zoom == 1 && t.x == 0 && t.y == 0, "No face: identity");
+    stage_face left = {0.3, 0.5, 0.2, 0.3};
+    t = stage_transform_for(&left, 280, 280, SHAPE_SQUARE, 0);
+    EXPECT(t.x > 0 && t.y > 0, "A face left of centre moves the picture right; head room moves it down");
+    stage_transform m = stage_transform_for(&left, 280, 280, SHAPE_SQUARE, 1);
+    EXPECT(near(m.x, -t.x) && near(m.y, t.y), "Mirroring flips the horizontal pan");
+
+    double masks[SHAPE_COUNT][2] = {{280, 280}, {280, 280}, {400, 225}};
+    stage_face extremes[] = {{0.01, 0.01, 0.25, 0.35}, {0.99, 0.99, 0.25, 0.35},
+                             {0.01, 0.99, 0.25, 0.35}, {0.99, 0.01, 0.25, 0.35}};
+    for (int shape = 0; shape < SHAPE_COUNT; shape++) {
+        double w = masks[shape][0], h = masks[shape][1], cw, ch;
+        stage_canvas(w, h, &cw, &ch);
+        for (int mirrored = 0; mirrored < 2; mirrored++) {
+            for (size_t i = 0; i < G_N_ELEMENTS(extremes); i++) {
+                t = stage_transform_for(&extremes[i], w, h, shape, mirrored);
+                double left_edge = w / 2 + t.x * w - cw * t.zoom / 2, top_edge = h / 2 + t.y * h - ch * t.zoom / 2;
+                EXPECT(left_edge <= 0.5 && left_edge + cw * t.zoom >= w - 0.5,
+                       "Horizontal pan at the extremes never exposes black bars");
+                EXPECT(top_edge <= 0.5 && top_edge + ch * t.zoom >= h - 0.5,
+                       "Vertical pan at the extremes never exposes black bars");
+            }
+        }
+    }
+
+    center_stage_update(&left);
+    EXPECT(center_stage_has_face(), "A detected face is followed");
+    for (int i = 0; i < 4; i++) center_stage_update(NULL);
+    EXPECT(center_stage_has_face(), "A few missed frames keep the face");
+    center_stage_update(NULL);
+    EXPECT(!center_stage_has_face(), "Losing the face goes back to identity");
+    g_usleep(300000);
+    t = center_stage_now(280, 280, SHAPE_CIRCLE, 1);
+    EXPECT(near(t.zoom, 1) && near(t.x, 0) && near(t.y, 0), "After the animation the picture is identity");
+    center_stage_update(&left);
+    center_stage_reset();
+    EXPECT(!center_stage_has_face(), "Turning Center Stage off forgets the face");
+
+    int w = 640, h = 360;
+    guint8 *gray = g_malloc(w * h);
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) gray[y * w + x] = (guint8)((x / 40 + y / 40) % 2 ? 200 : 40);
+    stage_face none;
+    EXPECT(!stage_detect(gray, w, h, &none), "pico finds no face in a checkerboard");
+    memset(gray, 128, w * h);
+    EXPECT(!stage_detect(gray, w, h, &none), "pico finds no face in a flat image");
+    g_free(gray);
+}
+
 int main(void) {
     test_overlay_geometry();
     test_area_corners();
@@ -258,6 +330,7 @@ int main(void) {
     test_panel_buttons();
     test_prefs();
     test_transparency();
+    test_center_stage();
     printf("Passed %d logic checks.\n", Checks);
     return 0;
 }

@@ -50,6 +50,7 @@ static void stop_pipeline(int async) {
     g_mutex_lock(&C.lock);
     C.frame_ready = 0;
     g_mutex_unlock(&C.lock);
+    center_stage_reset();
 }
 
 static gboolean deliver_frame(gpointer data) {
@@ -89,6 +90,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer data) {
         int schedule = !C.draw_pending;
         C.draw_pending = 1;
         g_mutex_unlock(&C.lock);
+        if (map.size >= size) center_stage_feed(map.data, w, h, w * 4);   /* Off the main thread. */
         gst_buffer_unmap(buf, &map);
         if (schedule) g_idle_add(deliver_frame, NULL);
     }

@@ -102,6 +102,7 @@ typedef struct {
     char *restore_token;   /* ScreenCast portal: remembers the shared monitor. */
     double transparency;   /* Camera preview transparency, 0...0.8. */
     int record_transparency; /* Apply it to the saved video too. */
+    int center_stage;      /* Follow the face (default on). */
 } prefs;
 
 extern prefs Prefs;
@@ -160,13 +161,18 @@ void audio_install_gain_probe(GstElement *element);
 
 #define TRANSPARENCY_MAX 0.8
 
+/* Center Stage pan and zoom of the camera picture inside its mask. The
+ * shift is a fraction of the mask size, so the camera window and the
+ * recording layer, drawn at different pixel sizes, show the same picture. */
+typedef struct { double zoom, x, y; } stage_transform;
+
+#define STAGE_IDENTITY ((stage_transform){1, 0, 0})
+
 typedef struct {
     rect frame;          /* Output pixels, top-left origin. */
     double radius;
     camera_shape shape;
 } camera_layer;
-
-#define FULL_VIEW ((rect){0, 0, 1, 1})
 
 double transparency_normalize(double value);
 int camera_layer_needed(double transparency, int apply_to_video, int visible, int running);
@@ -174,8 +180,28 @@ camera_layer camera_layer_map(rect window, rect monitor, rect region, int out_w,
                               camera_shape shape);
 int camera_layer_clip(camera_layer l, int out_w, int out_h, int *x, int *y, int *w, int *h);
 void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera_frame *f,
-                       int mirrored, rect view);
-void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored, rect view);
+                       int mirrored, stage_transform t);
+void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored,
+                        stage_transform t);
+void stage_canvas(double w, double h, double *cw, double *ch);
+
+/* ------------------------------------------------------ center_stage.c --- */
+
+/* A face in normalized camera coordinates, top-left origin: centre and size. */
+typedef struct { double cx, cy, w, h; } stage_face;
+
+double stage_soft_clamp(double value, double max);
+double stage_zoom(const stage_face *f, camera_shape shape);
+int stage_smooth(stage_face *smoothed, int has_smoothed, stage_face f);
+stage_transform stage_transform_for(const stage_face *f, double w, double h, camera_shape shape, int mirrored);
+int stage_detect(const guint8 *gray, int w, int h, stage_face *out);
+void center_stage_feed(const guint8 *bgrx, int w, int h, int stride);
+void center_stage_update(const stage_face *f);
+void center_stage_reset(void);
+int center_stage_has_face(void);
+int center_stage_animating(void);
+stage_transform center_stage_now(double w, double h, camera_shape shape, int mirrored);
+void center_stage_init(void (*on_change)(void));
 
 /* ------------------------------------------------------------ writer.c --- */
 
@@ -237,6 +263,7 @@ writer *recording_layer_target(rect *monitor, rect *region);
 GtkWidget *overlay_create(void);
 void overlay_apply_shape(void);
 void overlay_queue_draw(void);
+void overlay_animate(void);
 
 /* ------------------------------------------------------------- panel.c --- */
 

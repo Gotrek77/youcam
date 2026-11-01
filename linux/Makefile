@@ -7,7 +7,7 @@ CFLAGS ?= -O2
 CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
-CORE := geometry.o support.o prefs.o camera_layer.o
+CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o
 MEDIA := writer.o audio.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
@@ -30,6 +30,15 @@ make-icon: make_icon.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 $(APP) tests.o test_media.o make_icon.o: youcam.h
+
+# Face detection: pico (vendor/pico, MIT) with its cascade compiled in.
+facefinder.h: vendor/pico/facefinder
+	cd vendor/pico && xxd -i facefinder > ../../$@
+
+center_stage.o: facefinder.h vendor/pico/picornt.h
+
+picornt.o: vendor/pico/picornt.c vendor/pico/picornt.h
+	$(CC) $(CFLAGS) -Wno-maybe-uninitialized -c -o $@ $<
 
 test: tests test-media
 	./tests
@@ -55,4 +64,4 @@ uninstall:
 	for s in $(ICON_SIZES); do rm -f $(ICONDIR)/$${s}x$${s}/apps/youcam.png; done
 
 clean:
-	rm -rf *.o youcam tests test-media make-icon icons
+	rm -rf *.o facefinder.h youcam tests test-media make-icon icons
