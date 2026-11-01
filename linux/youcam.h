@@ -307,7 +307,7 @@ void status_icon_update(const char *icon_name, const char *tooltip);
 
 /* ----------------------------------------------------------- mic_level.c --- */
 
-#define MIC_AGC_CLIP_STEP_DB (-3.0)
+#define MIC_AGC_CLIP_STEP_DB (-6.0)
 #define MIC_AGC_STEP_DB 1.5
 #define MIC_VOLUME_MIN 0.05
 #define MIC_VOLUME_MAX 1.0

@@ -12,7 +12,7 @@
 #include "youcam.h"
 
 #define MIC_AGC_CLIP_LEVEL 0.999f
-#define MIC_AGC_HIGH_PEAK 0.708f      /* -3 dBFS: too close to clipping. */
+#define MIC_AGC_HIGH_PEAK 0.501f      /* -6 dBFS: too close to clipping. */
 #define MIC_AGC_LOW_PEAK 0.126f       /* -18 dBFS: speech too quiet. */
 #define MIC_AGC_GATE_PEAK 0.0056f     /* -45 dBFS: silence, never raise for it. */
 #define MIC_AGC_WINDOW_US (2 * G_USEC_PER_SEC)
