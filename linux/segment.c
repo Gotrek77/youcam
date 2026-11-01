@@ -30,6 +30,8 @@ static GThreadPool *Pool;
 static GMutex PoolLock;
 static GCond PoolDone;
 static int PoolPending;
+static gboolean PoolFailed;   /* Threads are unavailable: stay single-threaded. */
+static int LiveModels;        /* The pool lives only while a model does. */
 
 static void pool_work(gpointer data, gpointer unused) {
     (void)unused;
@@ -45,13 +47,23 @@ static void run_rows(void (*fn)(const seg_conv_args *, int, int), const seg_conv
     int rows = a->out_dims.h;
     int jobs = MIN(MIN(SEG_MAX_THREADS, (int)g_get_num_processors()), rows / SEG_MIN_ROWS_PER_JOB);
     if (jobs < 2) { fn(a, 0, rows); return; }
-    if (!Pool) Pool = g_thread_pool_new(pool_work, NULL, jobs - 1, TRUE, NULL);
+    if (!Pool && !PoolFailed) {
+        GError *err = NULL;
+        Pool = g_thread_pool_new_full(pool_work, NULL, NULL, jobs - 1, TRUE, &err);
+        if (!Pool) {
+            g_warning("Segmentation runs on one thread: %s", err->message);
+            g_error_free(err);
+            PoolFailed = TRUE;
+        }
+    }
+    if (!Pool) { fn(a, 0, rows); return; }
     seg_job job[SEG_MAX_THREADS];
     g_mutex_lock(&PoolLock);
     PoolPending = jobs - 1;
     g_mutex_unlock(&PoolLock);
     for (int i = 0; i < jobs; i++) job[i] = (seg_job){fn, a, rows * i / jobs, rows * (i + 1) / jobs};
-    for (int i = 1; i < jobs; i++) g_thread_pool_push(Pool, &job[i], NULL);
+    for (int i = 1; i < jobs; i++)
+        if (!g_thread_pool_push(Pool, &job[i], NULL)) pool_work(&job[i], NULL);   /* Never wait for a job nobody runs. */
     fn(a, job[0].y0, job[0].y1);   /* This thread does the first share. */
     g_mutex_lock(&PoolLock);
     while (PoolPending) g_cond_wait(&PoolDone, &PoolLock);
@@ -368,6 +380,7 @@ static const char *read_model(segment_model *m, reader *r) {
 segment_model *segment_load(const guint8 *data, size_t size, GError **err) {
     reader r = {data, size, 1};
     segment_model *m = g_new0(segment_model, 1);
+    LiveModels++;
     const char *problem = read_model(m, &r);
     if (!problem) return m;
     g_set_error(err, G_FILE_ERROR, G_FILE_ERROR_INVAL, "Invalid segmentation model: %s", problem);
@@ -377,6 +390,11 @@ segment_model *segment_load(const guint8 *data, size_t size, GError **err) {
 
 void segment_free(segment_model *m) {
     if (!m) return;
+    /* Idle workers would otherwise outlive the background mode that wanted them. */
+    if (--LiveModels == 0 && Pool) {
+        g_thread_pool_free(Pool, FALSE, TRUE);
+        Pool = NULL;
+    }
     for (int i = 0; i < m->tensor_count; i++) g_free(m->act[i]);
     for (int i = 0; i < m->layer_count; i++) g_free(m->layers[i].weights);
     g_free(m->act);

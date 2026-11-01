@@ -363,7 +363,8 @@ typedef struct segment_model segment_model;
 segment_model *segment_load(const guint8 *data, size_t size, GError **err);
 void segment_free(segment_model *m);
 void segment_input_size(const segment_model *m, int *w, int *h);
-/* rgb: packed 8-bit RGB at the input size; mask: person confidence 0...1, input size. */
+/* rgb: packed 8-bit RGB at the input size; mask: person confidence 0...1, input size.
+ * One caller at a time: the worker threads are shared by all models. */
 void segment_run(segment_model *m, const guint8 *rgb, float *mask);
 
 /* --------------------------------------------------------------- app.c --- */
