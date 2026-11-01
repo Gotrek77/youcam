@@ -220,6 +220,7 @@ typedef struct {
 writer *writer_start(const char *path, const char *video_source, GstElement *mic,
                      const rect *crop_fraction, int camera_layer, writer_callbacks cb, GError **err);
 int writer_output_size(writer *w, int *width, int *height);
+const char *video_encoder_name(void);
 void writer_push_camera(writer *w, const guint8 *bgra, int width, int height, int stride,
                         int x, int y, int visible);
 void writer_pause(writer *w);

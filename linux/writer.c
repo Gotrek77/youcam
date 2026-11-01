@@ -49,8 +49,12 @@ static GstPadProbeReturn size_probe(GstPad *pad, GstPadProbeInfo *info, gpointer
      * screen pad has data: it then knows no size and picks the minimum (16x16
      * after x264). PipeWire starts late, so pin the output to the screen. */
     if (w->outsize && width > 0 && height > 0) {
+        /* Same format and colorimetry as its inputs too (see SRGB_LABEL):
+         * otherwise the compositor converts every pixel, which took six CPU
+         * cores at 2560x1600. */
         GstCaps *size = gst_caps_new_simple("video/x-raw", "width", G_TYPE_INT, width,
             "height", G_TYPE_INT, height, "framerate", GST_TYPE_FRACTION, 30, 1, NULL);
+        gst_caps_set_simple(size, "format", G_TYPE_STRING, "BGRA", "colorimetry", G_TYPE_STRING, "sRGB", NULL);
         g_object_set(w->outsize, "caps", size, NULL);
         gst_caps_unref(size);
     }
@@ -170,6 +174,63 @@ static gboolean finish_timeout(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+/* H.264 encoders, best first. Encoding a 2560x1600 screen in software costs
+ * about 60% of a CPU core, color conversion included; the Intel GPU (VA-API,
+ * conversion on the GPU too) about 5%, and it does not wake a discrete GPU
+ * on hybrid laptops. NVENC comes next, x264 always works. */
+static const struct { const char *name, *chain; } Encoders[] = {
+    /* drop-allocation: left to itself the compositor blends straight into
+     * mapped GPU memory, which is very slow to read back (6 CPU cores). */
+    {"va", "identity drop-allocation=true ! vapostproc ! video/x-raw(memory:VAMemory),format=NV12 ! "
+           "vah264enc rate-control=vbr bitrate=" G_STRINGIFY(VIDEO_BITRATE_KBPS) " key-int-max=60"},
+    {"nvenc", "videoconvert ! video/x-raw,format=NV12 ! "
+              "nvh264enc bitrate=" G_STRINGIFY(VIDEO_BITRATE_KBPS) " gop-size=60"},
+    {"x264", "videoconvert ! video/x-raw,format=I420 ! "
+             "x264enc tune=zerolatency speed-preset=veryfast bitrate=" G_STRINGIFY(VIDEO_BITRATE_KBPS)
+             " key-int-max=60"},
+};
+
+/* An encoder plugin can be installed while its GPU is missing or busy, so
+ * each candidate encodes two frames before it is trusted. */
+static int encoder_works(const char *chain) {
+    char *desc = g_strdup_printf("videotestsrc num-buffers=2 ! video/x-raw,format=BGRA,width=320,height=240 ! "
+                                 "%s ! fakesink", chain);
+    GstElement *p = gst_parse_launch(desc, NULL);
+    g_free(desc);
+    if (!p) return 0;
+    gst_element_set_state(p, GST_STATE_PLAYING);
+    GstBus *bus = gst_element_get_bus(p);
+    GstMessage *m = gst_bus_timed_pop_filtered(bus, 5 * GST_SECOND, GST_MESSAGE_EOS | GST_MESSAGE_ERROR);
+    int ok = m && GST_MESSAGE_TYPE(m) == GST_MESSAGE_EOS;
+    if (m) gst_message_unref(m);
+    gst_object_unref(bus);
+    gst_element_set_state(p, GST_STATE_NULL);
+    gst_object_unref(p);
+    return ok;
+}
+
+/* Chosen once per run. YOUCAM_ENCODER=va|nvenc|x264 forces one (tests, bug reports). */
+const char *video_encoder_name(void) {
+    static const char *chosen;
+    if (chosen) return chosen;
+    const char *forced = g_getenv("YOUCAM_ENCODER");
+    for (size_t i = 0; i < G_N_ELEMENTS(Encoders) && !chosen; i++) {
+        int last = i == G_N_ELEMENTS(Encoders) - 1;
+        if (forced ? strcmp(forced, Encoders[i].name) == 0 : last || encoder_works(Encoders[i].chain))
+            chosen = Encoders[i].name;
+    }
+    if (!chosen) chosen = "x264";
+    g_print("youcam: video encoder %s\n", chosen);
+    return chosen;
+}
+
+static const char *video_encoder(void) {
+    const char *name = video_encoder_name();
+    for (size_t i = 0; i < G_N_ELEMENTS(Encoders); i++)
+        if (strcmp(name, Encoders[i].name) == 0) return Encoders[i].chain;
+    return Encoders[G_N_ELEMENTS(Encoders) - 1].chain;
+}
+
 /* Linux addition: WebRTC noise suppression (the one in browsers' calls) plus
  * its high-pass filter, which removes hum and room noise from cheap built-in
  * microphones. Echo cancelling and automatic gain stay off: nothing plays back
@@ -188,6 +249,11 @@ static char *noise_reduction_element(int level) {
         "noise-suppression=true noise-suppression-level=%s ! audioconvert ! ", names[level]);
 }
 
+/* The screen arrives as BGRA labelled with varying spellings of sRGB
+ * (0:0:4:1, 0:1:4:1). A differing label makes the compositor run a full color
+ * conversion; relabelling, without touching pixels, keeps it a plain blend. */
+#define SRGB_LABEL "capssetter join=true caps=video/x-raw,colorimetry=sRGB"
+
 writer *writer_start(const char *path, const char *video_source, GstElement *mic,
                      const rect *crop_fraction, int camera_layer, writer_callbacks cb, GError **err) {
     char *denoise = noise_reduction_element(Prefs.noise_reduction);
@@ -198,18 +264,17 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
     g_free(denoise);
     /* Optional camera layer: an appsrc composited over the screen. */
     const char *layer = camera_layer
-        ? "videoconvert ! comp.sink_0 "
+        ? "videoconvert ! video/x-raw,format=BGRA ! " SRGB_LABEL " ! comp.sink_0 "
           "appsrc name=camera is-live=true do-timestamp=true format=time "
-          "caps=video/x-raw,format=BGRA,width=2,height=2,framerate=0/1 ! videoconvert ! comp.sink_1 "
+          "caps=video/x-raw,format=BGRA,width=2,height=2,framerate=0/1 ! videoconvert ! "
+          "video/x-raw,format=BGRA ! " SRGB_LABEL " ! comp.sink_1 "
           "compositor name=comp ignore-inactive-pads=true background=black ! "
           "capsfilter name=outsize caps=video/x-raw,framerate=30/1 ! "
         : "";
     char *desc = g_strdup_printf(
         "%s ! videoconvert ! videocrop name=crop ! videorate ! video/x-raw,framerate=30/1 ! %s"
-        "videoconvert ! video/x-raw,format=I420 ! "
-        "x264enc tune=zerolatency speed-preset=veryfast bitrate=%d key-int-max=60 ! "
-        "h264parse ! queue ! mux. %sqtmux name=mux ! filesink name=file",
-        video_source, layer, VIDEO_BITRATE_KBPS, audio);
+        "%s ! h264parse ! queue ! mux. %sqtmux name=mux ! filesink name=file",
+        video_source, layer, video_encoder(), audio);
     GstElement *p = gst_parse_launch(desc, err);
     g_free(desc);
     g_free(audio);
