@@ -177,6 +177,31 @@ void audio_shutdown(void);
 void audio_set_auto_mic_level(int on);
 void audio_install_gain_probe(GstElement *element);
 
+/* ---------------------------------------------------------- background.c --- */
+
+typedef enum { SEG_LANDSCAPE, SEG_SQUARE, SEG_VARIANTS } seg_variant;
+const guint8 *background_model_bytes(seg_variant v, size_t *size);
+
+extern const char *const BackgroundNames[BG_COUNT];    /* Prefs values: "off", "transparent", ... */
+extern const char *const BackgroundTitles[BG_COUNT];   /* Menu labels: "Off", "Transparent", ... */
+#define BACKGROUND_DEFAULT_COLOR "#333333"
+
+background_mode background_mode_parse(const char *name);              /* Unknown or NULL -> BG_OFF. */
+int background_color_parse(const char *text, double rgb[3]);          /* "#rrggbb"; 0 if invalid. */
+void frame_to_model(const guint8 *bgrx, int w, int h, int stride, guint8 *rgb, int mw, int mh);
+void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous);
+void mask_compose(const camera_frame *f, const guint8 *mask, int mw, int mh, camera_frame *out);
+void blur_small(const camera_frame *f, camera_frame *out);
+
+/* What camera_layer.c paints instead of the plain frame. */
+typedef struct {
+    background_mode mode;     /* Never BG_OFF. */
+    camera_frame person;      /* Premultiplied ARGB32, alpha = person. */
+    camera_frame blurred;     /* BG_BLUR: small BGRx frame. */
+    GdkPixbuf *image;         /* BG_IMAGE. */
+    double rgb[3];            /* BG_COLOR. */
+} background_layer;
+
 /* ------------------------------------------------------ camera_layer.c --- */
 
 #define TRANSPARENCY_MAX 0.8
@@ -200,9 +225,9 @@ camera_layer camera_layer_map(rect window, rect monitor, rect region, int out_w,
                               camera_shape shape);
 int camera_layer_clip(camera_layer l, int out_w, int out_h, int *x, int *y, int *w, int *h);
 void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera_frame *f,
-                       int mirrored, stage_transform t);
+                       int mirrored, stage_transform t, const background_layer *bg);
 void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored,
-                        stage_transform t);
+                        stage_transform t, const background_layer *bg);
 void stage_canvas(double w, double h, double *cw, double *ch);
 
 /* ------------------------------------------------------ center_stage.c --- */
@@ -386,21 +411,5 @@ const char *app_area_name(void);
 int app_panel_visible(void);
 void app_quit(void);
 void app_show_message(const char *title, const char *text, GtkMessageType type);
-
-/* ---------------------------------------------------------- background.c --- */
-
-typedef enum { SEG_LANDSCAPE, SEG_SQUARE, SEG_VARIANTS } seg_variant;
-const guint8 *background_model_bytes(seg_variant v, size_t *size);
-
-extern const char *const BackgroundNames[BG_COUNT];    /* Prefs values: "off", "transparent", ... */
-extern const char *const BackgroundTitles[BG_COUNT];   /* Menu labels: "Off", "Transparent", ... */
-#define BACKGROUND_DEFAULT_COLOR "#333333"
-
-background_mode background_mode_parse(const char *name);              /* Unknown or NULL -> BG_OFF. */
-int background_color_parse(const char *text, double rgb[3]);          /* "#rrggbb"; 0 if invalid. */
-void frame_to_model(const guint8 *bgrx, int w, int h, int stride, guint8 *rgb, int mw, int mh);
-void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous);
-void mask_compose(const camera_frame *f, const guint8 *mask, int mw, int mh, camera_frame *out);
-void blur_small(const camera_frame *f, camera_frame *out);
 
 #endif

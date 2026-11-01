@@ -142,7 +142,7 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     }
     const camera_frame *f = camera_current_frame();
     if (!f) return TRUE;
-    camera_paint_frame(cr, f, w, h, Prefs.mirrored, center_stage_now(w, h, Prefs.shape, Prefs.mirrored));
+    camera_paint_frame(cr, f, w, h, Prefs.mirrored, center_stage_now(w, h, Prefs.shape, Prefs.mirrored), NULL);
     return TRUE;
 }
 

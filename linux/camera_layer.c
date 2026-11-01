@@ -47,11 +47,12 @@ int camera_layer_clip(camera_layer l, int out_w, int out_h, int *x, int *y, int 
     return 1;
 }
 
-/* Draws the camera (aspect fill, mirrored if asked, shape-masked) into a
+/* Draws the camera (aspect fill, mirrored if asked, shape-masked, or with
+ * a backdrop behind the person when bg is given) into a
  * BGRA canvas whose top-left is at (cx, cy) in output pixels, with the
  * same Center Stage transform as the camera window. */
 void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera_frame *f,
-                       int mirrored, stage_transform t) {
+                       int mirrored, stage_transform t, const background_layer *bg) {
     cairo_save(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
@@ -59,16 +60,20 @@ void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
     cairo_translate(cr, -cx, -cy);
     rect r = {l.frame.x - HALO_PX, l.frame.y - HALO_PX, l.frame.w + 2 * HALO_PX, l.frame.h + 2 * HALO_PX};
-    double rad = fmin(l.radius + HALO_PX, fmin(r.w, r.h) / 2);
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, r.x + r.w - rad, r.y + rad, rad, -M_PI / 2, 0);
-    cairo_arc(cr, r.x + r.w - rad, r.y + r.h - rad, rad, 0, M_PI / 2);
-    cairo_arc(cr, r.x + rad, r.y + r.h - rad, rad, M_PI / 2, M_PI);
-    cairo_arc(cr, r.x + rad, r.y + rad, rad, M_PI, 3 * M_PI / 2);
-    cairo_close_path(cr);
+    if (bg && bg->mode == BG_TRANSPARENT) {
+        cairo_rectangle(cr, r.x, r.y, r.w, r.h);   /* The person is the shape. */
+    } else {
+        double rad = fmin(l.radius + HALO_PX, fmin(r.w, r.h) / 2);
+        cairo_new_sub_path(cr);
+        cairo_arc(cr, r.x + r.w - rad, r.y + rad, rad, -M_PI / 2, 0);
+        cairo_arc(cr, r.x + r.w - rad, r.y + r.h - rad, rad, 0, M_PI / 2);
+        cairo_arc(cr, r.x + rad, r.y + r.h - rad, rad, M_PI / 2, M_PI);
+        cairo_arc(cr, r.x + rad, r.y + rad, rad, M_PI, 3 * M_PI / 2);
+        cairo_close_path(cr);
+    }
     cairo_clip(cr);
     cairo_translate(cr, r.x, r.y);
-    camera_paint_frame(cr, f, r.w, r.h, mirrored, t);
+    camera_paint_frame(cr, f, r.w, r.h, mirrored, t, bg);
     cairo_restore(cr);
 }
 
@@ -85,11 +90,12 @@ void stage_canvas(double w, double h, double *cw, double *ch) {
     }
 }
 
-/* Paints a camera frame into a w x h mask: aspect fill into the 16:9
- * canvas centred on the mask, then the Center Stage shift and zoom around
- * the mask centre. Shared with the preview so both show the same picture. */
-void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored,
-                        stage_transform t) {
+/* Paints w x h pixels of any cairo format with the camera transform:
+ * aspect fill into the 16:9 canvas centred on the mask, then the Center
+ * Stage shift and zoom around the mask centre. A smaller copy of the
+ * frame (the blurred background) lands on exactly the same place. */
+static void paint_pixels(cairo_t *cr, const camera_frame *f, cairo_format_t format, double w, double h,
+                         int mirrored, stage_transform t) {
     double cw, ch;
     stage_canvas(w, h, &cw, &ch);
     cairo_save(cr);
@@ -103,11 +109,45 @@ void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, 
     double scale = fmax(cw / f->width, ch / f->height);
     cairo_translate(cr, (cw - f->width * scale) / 2, (ch - f->height * scale) / 2);
     cairo_scale(cr, scale, scale);
-    cairo_surface_t *image = cairo_image_surface_create_for_data(
-        f->data, CAIRO_FORMAT_RGB24, f->width, f->height, f->stride);
+    cairo_surface_t *image = cairo_image_surface_create_for_data(f->data, format, f->width, f->height, f->stride);
     cairo_set_source_surface(cr, image, 0, 0);
+    cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);   /* No dark seams when scaled up. */
     cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
-    cairo_paint(cr);
+    cairo_rectangle(cr, 0, 0, f->width, f->height);
+    cairo_fill(cr);
     cairo_surface_destroy(image);
     cairo_restore(cr);
+}
+
+/* A background image fills the mask (cover), still and unmirrored. */
+static void paint_cover(cairo_t *cr, GdkPixbuf *image, double w, double h) {
+    double iw = gdk_pixbuf_get_width(image), ih = gdk_pixbuf_get_height(image);
+    double scale = fmax(w / iw, h / ih);
+    cairo_save(cr);
+    cairo_translate(cr, (w - iw * scale) / 2, (h - ih * scale) / 2);
+    cairo_scale(cr, scale, scale);
+    gdk_cairo_set_source_pixbuf(cr, image, 0, 0);
+    cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);   /* The upscaled edge stays opaque. */
+    cairo_paint(cr);
+    cairo_restore(cr);
+}
+
+/* Paints a camera frame into a w x h mask, shared with the preview so both
+ * show the same picture. With a background layer, paints the backdrop
+ * first and the person, cut out by the mask, on top. */
+void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored,
+                        stage_transform t, const background_layer *bg) {
+    if (!bg) {
+        paint_pixels(cr, f, CAIRO_FORMAT_RGB24, w, h, mirrored, t);
+        return;
+    }
+    if (bg->mode == BG_COLOR) {
+        cairo_set_source_rgb(cr, bg->rgb[0], bg->rgb[1], bg->rgb[2]);
+        cairo_paint(cr);
+    } else if (bg->mode == BG_IMAGE) {
+        paint_cover(cr, bg->image, w, h);
+    } else if (bg->mode == BG_BLUR) {
+        paint_pixels(cr, &bg->blurred, CAIRO_FORMAT_RGB24, w, h, mirrored, t);
+    }
+    paint_pixels(cr, &bg->person, CAIRO_FORMAT_ARGB32, w, h, mirrored, t);
 }

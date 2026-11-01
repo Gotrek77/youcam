@@ -255,7 +255,7 @@ static void test_transparency(void) {
             EXPECT(camera_layer_clip(cl, 320, 180, &x, &y, &w, &h), "The layer is inside the movie");
             cairo_surface_t *img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
             cairo_t *cr = cairo_create(img);
-            camera_layer_draw(cr, cl, x, y, &f, mirrored, STAGE_IDENTITY);
+            camera_layer_draw(cr, cl, x, y, &f, mirrored, STAGE_IDENTITY, NULL);
             cairo_destroy(cr);
             cairo_surface_flush(img);
             guint8 *p = cairo_image_surface_get_data(img);
@@ -453,6 +453,41 @@ static void test_background(void) {
     g_free(blurred.data);
 }
 
+/* Renders a 64x36 frame (16:9, so the canvas is the frame) whose left half is
+ * the person, and returns the ARGB32 pixel at x of row 18. */
+static guint32 render_pixel(background_mode mode, int x) {
+    static guint8 white[64 * 36 * 4];
+    memset(white, 255, sizeof(white));
+    camera_frame f = {64, 36, 256, white};
+    guint8 mask[2] = {255, 0};
+    background_layer bg = {mode, {0, 0, 0, NULL}, {0, 0, 0, NULL}, NULL, {1, 0, 0}};
+    mask_compose(&f, mask, 2, 1, &bg.person);
+    guint8 blue[4 * 2 * 4];
+    for (int i = 0; i < 8; i++) { blue[i * 4] = 255; blue[i * 4 + 1] = 0; blue[i * 4 + 2] = 0; blue[i * 4 + 3] = 255; }
+    bg.blurred = (camera_frame){4, 2, 16, g_memdup2(blue, sizeof(blue))};
+    bg.image = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 8, 8);
+    gdk_pixbuf_fill(bg.image, 0x00ff00ff);
+    cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 64, 36);
+    cairo_t *cr = cairo_create(s);
+    camera_paint_frame(cr, &f, 64, 36, 0, STAGE_IDENTITY, &bg);
+    cairo_destroy(cr);
+    cairo_surface_flush(s);
+    guint32 px = *(guint32 *)(cairo_image_surface_get_data(s) + 18 * cairo_image_surface_get_stride(s) + x * 4);
+    cairo_surface_destroy(s);
+    g_free(bg.person.data);
+    g_free(bg.blurred.data);
+    g_object_unref(bg.image);
+    return px;
+}
+
+static void test_background_paint(void) {
+    EXPECT(render_pixel(BG_COLOR, 2) == 0xffffffff, "The person stays in front");
+    EXPECT(render_pixel(BG_COLOR, 61) == 0xffff0000, "Color fills the background");
+    EXPECT(render_pixel(BG_IMAGE, 61) == 0xff00ff00, "The image fills the background");
+    EXPECT(render_pixel(BG_BLUR, 61) == 0xff0000ff, "The blurred frame fills the background");
+    EXPECT(render_pixel(BG_TRANSPARENT, 61) >> 24 == 0, "Transparent leaves the background empty");
+}
+
 int main(void) {
     test_overlay_geometry();
     test_area_corners();
@@ -464,6 +499,7 @@ int main(void) {
     test_transparency();
     test_center_stage();
     test_background();
+    test_background_paint();
     test_mutter_monitor_rect();
     test_mic_agc();
     printf("Passed %d logic checks.\n", Checks);

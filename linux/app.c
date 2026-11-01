@@ -494,7 +494,7 @@ static gboolean layer_tick(gpointer data) {
     cairo_surface_t *s = cairo_image_surface_create_for_data(LayerPixels, CAIRO_FORMAT_ARGB32, cw, ch, stride);
     cairo_t *cr = cairo_create(s);
     camera_layer_draw(cr, l, x, y, f, Prefs.mirrored,
-                      center_stage_now(l.frame.w, l.frame.h, Prefs.shape, Prefs.mirrored));
+                      center_stage_now(l.frame.w, l.frame.h, Prefs.shape, Prefs.mirrored), NULL);
     cairo_destroy(cr);
     cairo_surface_flush(s);
     cairo_surface_destroy(s);
