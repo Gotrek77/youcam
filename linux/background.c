@@ -18,6 +18,7 @@ const char *const BackgroundTitles[BG_COUNT] = {"Off", "Transparent", "Blur", "I
 #define MASK_SMOOTHING 0.6   /* Weight of the newest mask: lower is steadier, higher follows faster. */
 #define BLUR_FACTOR 16       /* The blurred background is computed this many times smaller... */
 #define BLUR_RADIUS 2        /* ...with a box blur of this radius, then scaled up smoothly. */
+#define IMAGE_MAX_SIDE 1280  /* A background image is kept at most this long: a camera sized window. */
 
 background_mode background_mode_parse(const char *name) {
     for (int i = 0; name && i < BG_COUNT; i++)
@@ -74,8 +75,8 @@ void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous) {
 
 /* The camera frame with the mask (bilinear, half-pixel centers) as alpha:
  * premultiplied ARGB32, the person surface painted over the backdrop.
- * ponytail: per-pixel float math, ~2-4 ms at 720p; precompute the x taps
- * per row if it ever shows in a profile. */
+ * Plain per-pixel float math costs ~2-4 ms at 720p; the x taps could be
+ * computed once per frame instead of once per row if a profile ever asks. */
 void mask_compose(const camera_frame *f, const guint8 *mask, int mw, int mh, camera_frame *out) {
     frame_resize(out, f->width, f->height);
     for (int y = 0; y < f->height; y++) {
@@ -119,6 +120,21 @@ void blur_small(const camera_frame *f, camera_frame *out) {
     box_pass(out->data, tmp, w, h, 1, 0);
     box_pass(tmp, out->data, w, h, 0, 1);
     g_free(tmp);
+}
+
+/* A picture as it should be drawn: phones store photos sideways plus an
+ * EXIF orientation, and a 12 MP image costs tens of milliseconds to paint,
+ * so it is turned upright and shrunk once here instead of on every frame. */
+GdkPixbuf *background_image_fit(GdkPixbuf *image) {
+    GdkPixbuf *upright = gdk_pixbuf_apply_embedded_orientation(image);
+    int w = gdk_pixbuf_get_width(upright), h = gdk_pixbuf_get_height(upright);
+    if (MAX(w, h) <= IMAGE_MAX_SIDE) return upright;
+    double scale = (double)IMAGE_MAX_SIDE / MAX(w, h);
+    int sw = MAX(1, (int)lround(w * scale)), sh = MAX(1, (int)lround(h * scale));
+    GdkPixbuf *small = gdk_pixbuf_scale_simple(upright, sw, sh, GDK_INTERP_BILINEAR);
+    if (!small) return upright;   /* Out of memory: slow to paint, but still right. */
+    g_object_unref(upright);
+    return small;
 }
 
 /* ------------------------------------------------------------- worker --- */
@@ -183,7 +199,7 @@ static gboolean deliver_mask(gpointer data) {
 static gpointer worker(gpointer unused) {
     (void)unused;
     segment_model *model = NULL;
-    int loaded = -1, has_previous = 0, n = 0;
+    int loaded = -1, has_previous = 0, n = 0, load_failed = 0;
     float *raw = NULL;
     guint8 *smoothed = NULL;
     g_mutex_lock(&B.lock);
@@ -196,7 +212,17 @@ static gpointer worker(gpointer unused) {
             size_t size;
             const guint8 *data = background_model_bytes(v, &size);
             segment_free(model);
-            model = segment_load(data, size, NULL);   /* Checked by background_available(). */
+            /* The bytes were checked by background_available(), but the
+             * activations are a large allocation that may still fail. */
+            model = segment_load(data, size, NULL);
+            if (!model) {
+                if (!load_failed) g_printerr("youcam: background removal model did not load, skipping frames\n");
+                load_failed = 1;
+                loaded = -1;   /* Retry on the next frame, never run a NULL model. */
+                g_mutex_lock(&B.lock);
+                B.pending = 0;
+                continue;
+            }
             loaded = v;
             has_previous = 0;
             n = B.model_w[v] * B.model_h[v];
@@ -258,17 +284,30 @@ void background_apply_prefs(void) {
 }
 
 /* The chosen image, loaded once per path; NULL (and one log line) if it cannot be read. */
-static GdkPixbuf *background_image(void) {
+static cairo_surface_t *background_image(void) {
     const char *path = Prefs.background_image;
     if (g_strcmp0(path, B.image_path) == 0) return B.layer.image;
-    g_clear_object(&B.layer.image);
+    g_clear_pointer(&B.layer.image, cairo_surface_destroy);
     prefs_set_string(&B.image_path, path);
     GError *err = NULL;
-    if (path) B.layer.image = gdk_pixbuf_new_from_file(path, &err);
-    if (!B.layer.image) {
+    GdkPixbuf *loaded = path ? gdk_pixbuf_new_from_file(path, &err) : NULL;
+    if (!loaded) {
         g_printerr("youcam: background image unavailable, using Blur: %s\n", err ? err->message : "none chosen");
         g_clear_error(&err);
+        return NULL;
     }
+    /* Converted to a cairo surface here, not by every paint. Drawn by hand
+     * because gdk_cairo_surface_create_from_pixbuf wants a display. */
+    GdkPixbuf *fitted = background_image_fit(loaded);
+    B.layer.image = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, gdk_pixbuf_get_width(fitted),
+                                               gdk_pixbuf_get_height(fitted));
+    cairo_t *cr = cairo_create(B.layer.image);
+    gdk_cairo_set_source_pixbuf(cr, fitted, 0, 0);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    g_object_unref(fitted);
+    g_object_unref(loaded);
     return B.layer.image;
 }
 

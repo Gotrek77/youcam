@@ -451,6 +451,26 @@ static void test_background(void) {
     EXPECT(blurred.width == 4 && blurred.height == 2 && blurred.data[0] == 128 && blurred.data[5] == 128,
            "A uniform frame stays uniform when blurred");
     g_free(blurred.data);
+
+    GdkPixbuf *photo = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 4000, 3000);
+    GdkPixbuf *fitted = background_image_fit(photo);
+    EXPECT(gdk_pixbuf_get_width(fitted) == 1280 && gdk_pixbuf_get_height(fitted) == 960,
+           "A large background image is reduced once, keeping its aspect");
+    g_object_unref(fitted);
+    g_object_unref(photo);
+    GdkPixbuf *tiny = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 8, 6);
+    fitted = background_image_fit(tiny);
+    EXPECT(gdk_pixbuf_get_width(fitted) == 8 && gdk_pixbuf_get_height(fitted) == 6,
+           "A small background image keeps its size");
+    g_object_unref(fitted);
+    g_object_unref(tiny);
+    GdkPixbuf *portrait = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 3000, 2000);
+    gdk_pixbuf_set_option(portrait, "orientation", "6");   /* A phone photo taken upright. */
+    fitted = background_image_fit(portrait);
+    EXPECT(gdk_pixbuf_get_width(fitted) == 853 && gdk_pixbuf_get_height(fitted) == 1280,
+           "A background image is turned upright from its EXIF orientation");
+    g_object_unref(fitted);
+    g_object_unref(portrait);
 }
 
 /* Renders a 64x36 frame (16:9, so the canvas is the frame) whose left half is
@@ -465,8 +485,11 @@ static guint32 render_pixel(background_mode mode, int x) {
     guint8 blue[4 * 2 * 4];
     for (int i = 0; i < 8; i++) { blue[i * 4] = 255; blue[i * 4 + 1] = 0; blue[i * 4 + 2] = 0; blue[i * 4 + 3] = 255; }
     bg.blurred = (camera_frame){4, 2, 16, g_memdup2(blue, sizeof(blue))};
-    bg.image = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 8, 8);
-    gdk_pixbuf_fill(bg.image, 0x00ff00ff);
+    bg.image = cairo_image_surface_create(CAIRO_FORMAT_RGB24, 8, 8);
+    cairo_t *green = cairo_create(bg.image);
+    cairo_set_source_rgb(green, 0, 1, 0);
+    cairo_paint(green);
+    cairo_destroy(green);
     cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 64, 36);
     cairo_t *cr = cairo_create(s);
     camera_paint_frame(cr, &f, 64, 36, 0, STAGE_IDENTITY, &bg);
@@ -476,11 +499,36 @@ static guint32 render_pixel(background_mode mode, int x) {
     cairo_surface_destroy(s);
     g_free(bg.person.data);
     g_free(bg.blurred.data);
-    g_object_unref(bg.image);
+    cairo_surface_destroy(bg.image);
+    return px;
+}
+
+/* A small blurred frame whose aspect is not the camera's (64/16 x 36/16 =
+ * 4 x 2.25, stored as 4 x 1) must still cover exactly the frame: its last
+ * pixel, blue, belongs at x = 56, where the camera's last quarter is. */
+static guint32 render_blur_column(int x) {
+    static guint8 white[64 * 36 * 4];
+    memset(white, 255, sizeof(white));
+    camera_frame f = {64, 36, 256, white};
+    guint8 mask[2] = {255, 0};
+    background_layer bg = {BG_BLUR, {0, 0, 0, NULL}, {0, 0, 0, NULL}, NULL, {0, 0, 0}};
+    mask_compose(&f, mask, 2, 1, &bg.person);
+    guint8 small[4 * 4] = {0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 255, 0, 0, 255};   /* BGRx: red, red, red, blue. */
+    bg.blurred = (camera_frame){4, 1, 16, small};
+    cairo_surface_t *s = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 64, 36);
+    cairo_t *cr = cairo_create(s);
+    camera_paint_frame(cr, &f, 64, 36, 0, STAGE_IDENTITY, &bg);
+    cairo_destroy(cr);
+    cairo_surface_flush(s);
+    guint32 px = *(guint32 *)(cairo_image_surface_get_data(s) + 18 * cairo_image_surface_get_stride(s) + x * 4);
+    cairo_surface_destroy(s);
+    g_free(bg.person.data);
     return px;
 }
 
 static void test_background_paint(void) {
+    guint32 edge = render_blur_column(56);
+    EXPECT((edge & 0xff) > ((edge >> 16) & 0xff), "The blurred frame lines up with the camera frame");
     EXPECT(render_pixel(BG_COLOR, 2) == 0xffffffff, "The person stays in front");
     EXPECT(render_pixel(BG_COLOR, 61) == 0xffff0000, "Color fills the background");
     EXPECT(render_pixel(BG_IMAGE, 61) == 0xff00ff00, "The image fills the background");

@@ -192,13 +192,14 @@ void frame_to_model(const guint8 *bgrx, int w, int h, int stride, guint8 *rgb, i
 void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous);
 void mask_compose(const camera_frame *f, const guint8 *mask, int mw, int mh, camera_frame *out);
 void blur_small(const camera_frame *f, camera_frame *out);
+GdkPixbuf *background_image_fit(GdkPixbuf *image);   /* New ref: upright, longer side capped. */
 
 /* What camera_layer.c paints instead of the plain frame. */
 typedef struct {
     background_mode mode;     /* Never BG_OFF. */
     camera_frame person;      /* Premultiplied ARGB32, alpha = person. */
     camera_frame blurred;     /* BG_BLUR: small BGRx frame. */
-    GdkPixbuf *image;         /* BG_IMAGE. */
+    cairo_surface_t *image;   /* BG_IMAGE: fitted and converted once per file. */
     double rgb[3];            /* BG_COLOR. */
 } background_layer;
 
