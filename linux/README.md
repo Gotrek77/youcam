@@ -60,6 +60,12 @@ need. `make uninstall` removes everything `make install` added.
 - **Center Stage (Follow Face)** gently pans and zooms the camera to keep
   your face centred, in the preview and in recordings. It is on by default
   and remembered.
+- **Background** (Linux only) separates you from the room: **Transparent**
+  shows only you (the shape no longer applies), **Blur** softens the
+  background, **Image** puts a picture of your choice behind you, **Color** a
+  solid color. **Choose Image…** and **Choose Color…** pick them. It runs on
+  the CPU with no extra software, in the preview and in recordings, and is
+  off by default. `make bench-segment` shows how fast your CPU runs it.
 - **Show Recording Panel** opens optional controls. **Hide Camera** lets you
   record just the screen; launch YouCam again to bring the camera back.
 
@@ -73,6 +79,11 @@ quits; inspect the movie on the Desktop with `ffprobe`.
 
 Face detection uses [pico](https://github.com/nenadmarkus/pico) by Nenad
 Markus (MIT license), vendored in `vendor/pico/` with its license.
+
+Background removal uses MediaPipe Selfie Segmentation by Google (Apache
+License 2.0), converted by `tools/convert_selfie.py` and vendored in
+`vendor/selfie/` with its license and provenance. Test portraits in
+`testdata/selfie/` are public domain (NASA).
 
 ## Differences from macOS
 

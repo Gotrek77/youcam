@@ -32,7 +32,9 @@ static const char *HelpText =
     "use the same transparency in your recordings, or leave it unchecked to keep the recorded camera "
     "opaque. Both choices are remembered.\n\n"
     "Center Stage (Follow Face) gently pans and zooms the camera to keep your face centred, in "
-    "the preview and in recordings. Face detection uses pico by Nenad Markus (MIT license).";
+    "the preview and in recordings. Face detection uses pico by Nenad Markus (MIT license).\n\n"
+    "Background (Linux only) removes what is behind you: Transparent shows only you, Blur softens the "
+    "room, Image and Color replace it. It runs on your computer and applies to recordings too.";
 
 static struct {
     GtkApplication *gapp;
@@ -554,6 +556,69 @@ static void build_transparency_menu(GtkWidget *menu) {
     add_item(menu, "Reset Transparency to 0%", reset_transparency, 1);
 }
 
+/* Linux addition: separates the person from the room. Choosing Image without one picked yet asks for
+ * the picture first; every change goes through background_apply_prefs() so the worker starts or stops. */
+
+static void set_background(background_mode mode) {
+    Prefs.background_mode = mode;
+    prefs_save();
+    background_apply_prefs();
+    overlay_queue_draw();
+}
+
+static void choose_background_image(void) {
+    GtkWidget *dialog = gtk_file_chooser_dialog_new("Choose Background Image", NULL, GTK_FILE_CHOOSER_ACTION_OPEN,
+                                                    "_Cancel", GTK_RESPONSE_CANCEL, "_Open", GTK_RESPONSE_ACCEPT, NULL);
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_set_name(filter, "Images (PNG, JPEG)");
+    gtk_file_filter_add_mime_type(filter, "image/png");
+    gtk_file_filter_add_mime_type(filter, "image/jpeg");
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        char *path = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+        prefs_set_string(&Prefs.background_image, path);
+        g_free(path);
+        set_background(BG_IMAGE);
+    }
+    gtk_widget_destroy(dialog);
+}
+
+static void choose_background_color(void) {
+    GtkWidget *dialog = gtk_color_chooser_dialog_new("Choose Background Color", NULL);
+    double rgb[3];
+    if (background_color_parse(Prefs.background_color, rgb))
+        gtk_color_chooser_set_rgba(GTK_COLOR_CHOOSER(dialog), &(GdkRGBA){rgb[0], rgb[1], rgb[2], 1});
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK) {
+        GdkRGBA c;
+        gtk_color_chooser_get_rgba(GTK_COLOR_CHOOSER(dialog), &c);
+        char text[8];
+        snprintf(text, sizeof(text), "#%02x%02x%02x", (int)lround(c.red * 255), (int)lround(c.green * 255),
+                 (int)lround(c.blue * 255));
+        prefs_set_string(&Prefs.background_color, text);
+        set_background(BG_COLOR);
+    }
+    gtk_widget_destroy(dialog);
+}
+
+static void select_background(const char *name) {
+    background_mode mode = background_mode_parse(name);
+    if (mode == BG_IMAGE && !Prefs.background_image) choose_background_image();   /* Needs an image first. */
+    else set_background(mode);
+}
+
+static void build_background_menu(GtkWidget *menu) {
+    if (!background_available()) {
+        add_item(menu, "Background removal unavailable", NULL, 0);
+        return;
+    }
+    for (int m = 0; m < BG_COUNT; m++)
+        add_choice(menu, BackgroundTitles[m], BackgroundNames[m], Prefs.background_mode == (background_mode)m, 1,
+                   select_background);
+    add_separator(menu);
+    add_item(menu, "Choose Image…", choose_background_image, 1);
+    add_item(menu, "Choose Color…", choose_background_color, 1);
+}
+
 static void toggle_mirror(void) {
     Prefs.mirrored = !Prefs.mirrored;
     prefs_save();
@@ -693,6 +758,7 @@ GtkWidget *app_build_menu(void) {
     add_item(sizes, "Increase Size", increase_size, 1);
     add_item(sizes, "Decrease Size", decrease_size, 1);
     build_transparency_menu(add_submenu(menu, "Transparency", 1));
+    build_background_menu(add_submenu(menu, "Background", 1));
     GtkWidget *mirror = add_check(menu, "Mirror Camera", Prefs.mirrored, 0, 1);
     g_signal_connect_swapped(mirror, "activate", G_CALLBACK(toggle_mirror), NULL);
     GtkWidget *stage = add_check(menu, "Center Stage (Follow Face)", Prefs.center_stage, 0, 1);

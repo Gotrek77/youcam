@@ -38,6 +38,9 @@ First Linux version: a C port (GTK 3 + GStreamer) of the macOS app, kept in
   recording, as macOS does. With it active YouCam records through Mutter's
   screen cast; without it, through the ScreenCast portal.
   `YOUCAM_CAPTURE=portal|mutter` forces either path.
+- **Background** (Off, Transparent, Blur, Image, Color): CPU segmentation
+  with MediaPipe Selfie Segmentation converted to plain C, no new runtime
+  dependency; applies to the preview and to recordings.
 - `make install` / `make uninstall` (to `~/.local`), `make test`,
   `make smoke-test`, and `--record-test N` for a real N-second recording.
 
