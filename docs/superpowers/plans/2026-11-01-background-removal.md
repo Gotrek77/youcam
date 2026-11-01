@@ -612,7 +612,7 @@ int main(int argc, char **argv) {
 Makefile: add `segment.o` to `CORE`, a target, `test_segment.o` to the header dependency line, `-O3` for the engine, and the test to `test`/`clean`:
 
 ```make
-CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o segment.o
+CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o segment.o
 
 test-segment: test_segment.o $(CORE)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
@@ -782,7 +782,7 @@ void seg_add(const float *a, const float *b, float *out, size_t n) {
 - [ ] **Step 4: Run, verify it passes**
 
 Run: `cd linux && make test-segment && ./test-segment && make tests && ./tests`
-Expected: `Passed 12 segmentation checks.` and the existing `Passed 227 logic checks.`; no compiler warnings.
+Expected: `Passed 12 segmentation checks.` and the existing `Passed 244 logic checks.`; no compiler warnings.
 
 - [ ] **Step 5: Commit**
 
@@ -874,7 +874,7 @@ static void test_loader(void) {
 Makefile: add `background.o` to `CORE` and the embedding rule:
 
 ```make
-CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o segment.o background.o
+CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o segment.o background.o
 
 # Person segmentation: MediaPipe Selfie Segmentation (vendor/selfie, Apache 2.0), converted to .ysm.
 selfie_%.h: vendor/selfie/selfie_%.ysm
