@@ -127,6 +127,7 @@ void blur_small(const camera_frame *f, camera_frame *out) {
  * so it is turned upright and shrunk once here instead of on every frame. */
 GdkPixbuf *background_image_fit(GdkPixbuf *image) {
     GdkPixbuf *upright = gdk_pixbuf_apply_embedded_orientation(image);
+    if (!upright) upright = g_object_ref(image);   /* Rotating ran out of memory: keep it sideways. */
     int w = gdk_pixbuf_get_width(upright), h = gdk_pixbuf_get_height(upright);
     if (MAX(w, h) <= IMAGE_MAX_SIDE) return upright;
     double scale = (double)IMAGE_MAX_SIDE / MAX(w, h);

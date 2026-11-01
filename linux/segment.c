@@ -396,13 +396,15 @@ void segment_free(segment_model *m) {
     if (!m) return;
     /* Idle workers would otherwise outlive the background mode that wanted them. */
     if (--LiveModels == 0 && Pool) {
-        guint threads = g_thread_pool_get_num_threads(Pool);
+        /* The unused list is global (GIO parks its threads there too), so
+         * count ours on top of what is already parked. */
+        guint parked = g_thread_pool_get_num_unused_threads() + g_thread_pool_get_num_threads(Pool);
         g_thread_pool_free(Pool, FALSE, TRUE);
         Pool = NULL;
         /* Freed threads park as "unused" for ~15 s, but only a moment after
          * the free returns: stopping them at once would miss some. Off must
          * leave no thread, so wait (briefly, bounded) for them to park. */
-        for (int ms = 0; ms < SEG_PARK_WAIT_MS && g_thread_pool_get_num_unused_threads() < threads; ms++)
+        for (int ms = 0; ms < SEG_PARK_WAIT_MS && g_thread_pool_get_num_unused_threads() < parked; ms++)
             g_usleep(1000);
         g_thread_pool_stop_unused_threads();
     }
