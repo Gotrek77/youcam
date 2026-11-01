@@ -136,3 +136,240 @@ void seg_mul_channels(const float *in, const float *scale, seg_dims d, float *ou
 void seg_add(const float *a, const float *b, float *out, size_t n) {
     for (size_t i = 0; i < n; i++) out[i] = a[i] + b[i];
 }
+
+/* ---------------------------------------------------------------- .ysm
+ *
+ * The format written by tools/convert_selfie.py. Everything is little
+ * endian, 4 bytes per field (40-byte header, struct '<4s2I2f5I'):
+ *   "YSM1", u32 in_h, u32 in_w, f32 norm_scale, f32 norm_offset
+ *   (model input = byte * scale + offset), u32 invert (1: the model
+ *   outputs background, so the mask is 1 - output), u32 tensor_count,
+ *   layer_count, input (tensor index), output (tensor index).
+ * Then tensor_count shapes, u32 h, w, c each (NHWC, batch 1), then
+ * layer_count layers, each 11 u32: op, in0, in1, out, kh, kw, stride,
+ * pad_top, pad_left, weight_count, bias_count, followed by weight_count
+ * then bias_count f32. Layers run in file order; a layer reads tensors
+ * in0 (and in1 for MUL/ADD, 0xFFFFFFFF otherwise) and writes out.
+ * Ops: 1 CONV, 2 DWCONV, 3 RELU, 4 HSWISH, 5 SIGMOID, 6 MEAN (to 1x1),
+ * 7 MUL (in0 times the 1x1xC tensor in1, per channel), 8 ADD, 9 RESIZE
+ * (bilinear to the out shape), 10 TCONV (kernel == stride, no padding).
+ * Only the kernel ops carry weights. Layouts: CONV [kh][kw][in c][out c],
+ * DWCONV [kh][kw][c], TCONV [ky][kx][in c][out c]; bias has out c floats.
+ *
+ * The file is untrusted: every count, shape, index and size is checked
+ * before use, so a bad file is a GError, never a crash. */
+
+#if __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
+#error ".ysm files are little endian"
+#endif
+
+#define YSM_MAX_TENSORS 1024
+#define YSM_MAX_LAYERS 1024
+#define YSM_MAX_DIM 4096
+#define YSM_MAX_ELEMENTS (1 << 24)
+#define YSM_MAX_KERNEL 15
+#define YSM_LAYER_FIELDS 11
+
+enum { OP_CONV = 1, OP_DWCONV, OP_RELU, OP_HSWISH, OP_SIGMOID, OP_MEAN, OP_MUL, OP_ADD, OP_RESIZE, OP_TCONV };
+
+typedef struct {
+    int op, in0, in1, out, kh, kw, stride, pad_top, pad_left;
+    float *weights, *bias;   /* One allocation; bias points inside it. */
+} seg_layer;
+
+struct segment_model {
+    int in_w, in_h, invert;
+    float norm_scale, norm_offset;
+    int tensor_count, layer_count, input, output;
+    seg_dims *dims;
+    float **act;
+    seg_layer *layers;
+};
+
+typedef struct { const guint8 *p; size_t left; int ok; } reader;
+
+static guint32 read_u32(reader *r) {
+    guint32 v = 0;
+    if (r->left < 4) { r->ok = 0; return 0; }
+    memcpy(&v, r->p, 4);
+    r->p += 4;
+    r->left -= 4;
+    return v;
+}
+
+static float read_f32(reader *r) {
+    guint32 u = read_u32(r);
+    float f;
+    memcpy(&f, &u, 4);
+    return f;
+}
+
+static int field(guint32 v) { return v > INT_MAX ? -1 : (int)v; }   /* 0xFFFFFFFF (unused) -> -1 */
+
+static int same_dims(seg_dims a, seg_dims b) { return a.h == b.h && a.w == b.w && a.c == b.c; }
+
+/* ready[t] is set once the input or an earlier layer has produced tensor t. */
+static const char *check_layer(const segment_model *m, const seg_layer *l, guint32 wc, guint32 bc,
+                               const unsigned char *ready) {
+    int binary = l->op == OP_MUL || l->op == OP_ADD, kernel = l->op == OP_CONV || l->op == OP_DWCONV || l->op == OP_TCONV;
+    if (l->op < OP_CONV || l->op > OP_TCONV) return "unknown operator";
+    if (l->in0 < 0 || l->in0 >= m->tensor_count || l->out < 0 || l->out >= m->tensor_count ||
+        (binary && (l->in1 < 0 || l->in1 >= m->tensor_count)))
+        return "tensor index out of range";
+    if (!ready[l->in0] || (binary && !ready[l->in1])) return "a layer reads a tensor nothing has produced";
+    if (l->out == l->in0 || (binary && l->out == l->in1) || l->out == m->input) return "a layer overwrites its input";
+    if (kernel && (l->kh < 1 || l->kw < 1 || l->kh > YSM_MAX_KERNEL || l->kw > YSM_MAX_KERNEL ||
+                   l->stride < 1 || l->stride > YSM_MAX_KERNEL || l->pad_top < 0 || l->pad_left < 0 ||
+                   l->pad_top >= l->kh || l->pad_left >= l->kw))
+        return "bad kernel";
+    if (!kernel && (wc || bc)) return "unexpected weights";
+    seg_dims i = m->dims[l->in0], o = m->dims[l->out];
+    guint64 taps = (guint64)l->kh * l->kw;
+    switch (l->op) {
+    case OP_CONV:
+        return wc == taps * i.c * o.c && bc == (guint32)o.c ? NULL : "convolution weights do not match";
+    case OP_DWCONV:
+        return i.c == o.c && wc == taps * i.c && bc == (guint32)o.c ? NULL : "depthwise weights do not match";
+    case OP_TCONV:
+        return l->kh == l->kw && l->kh == l->stride && !l->pad_top && !l->pad_left &&
+               o.h == i.h * l->stride && o.w == i.w * l->stride && wc == taps * i.c * o.c &&
+               bc == (guint32)o.c ? NULL : "transposed convolution does not match";
+    case OP_MEAN:
+        return o.h == 1 && o.w == 1 && o.c == i.c ? NULL : "mean shape";
+    case OP_MUL: {
+        seg_dims s = m->dims[l->in1];
+        return s.h == 1 && s.w == 1 && s.c == i.c && same_dims(i, o) ? NULL : "multiply shape";
+    }
+    case OP_ADD:
+        return same_dims(i, m->dims[l->in1]) && same_dims(i, o) ? NULL : "add shape";
+    case OP_RESIZE:
+        return i.c == o.c ? NULL : "resize channels";
+    default:   /* RELU, HSWISH, SIGMOID */
+        return same_dims(i, o) ? NULL : "activation shape";
+    }
+}
+
+static const char *read_tensors(segment_model *m, reader *r, guint32 count) {
+    m->dims = g_new0(seg_dims, count);
+    m->act = g_new0(float *, count);
+    m->tensor_count = count;
+    for (guint32 t = 0; t < count; t++) {
+        guint32 h = read_u32(r), w = read_u32(r), c = read_u32(r);
+        if (!r->ok) return "truncated tensors";
+        if (!h || !w || !c || h > YSM_MAX_DIM || w > YSM_MAX_DIM || c > YSM_MAX_DIM ||
+            (guint64)h * w * c > YSM_MAX_ELEMENTS)
+            return "bad tensor shape";
+        m->dims[t] = (seg_dims){(int)h, (int)w, (int)c};
+        m->act[t] = g_new0(float, (size_t)h * w * c);
+    }
+    return NULL;
+}
+
+static const char *read_layers(segment_model *m, reader *r, guint32 count) {
+    m->layers = g_new0(seg_layer, count);
+    unsigned char *ready = g_new0(unsigned char, m->tensor_count);
+    ready[m->input] = 1;
+    const char *bad = NULL;
+    for (guint32 i = 0; i < count; i++) {
+        guint32 f[YSM_LAYER_FIELDS];
+        for (int k = 0; k < YSM_LAYER_FIELDS; k++) f[k] = read_u32(r);
+        if (!r->ok) { bad = "truncated layer"; break; }
+        seg_layer *l = &m->layers[i];
+        m->layer_count = i + 1;
+        *l = (seg_layer){field(f[0]), field(f[1]), field(f[2]), field(f[3]), field(f[4]), field(f[5]),
+                         field(f[6]), field(f[7]), field(f[8]), NULL, NULL};
+        if ((bad = check_layer(m, l, f[9], f[10], ready))) break;
+        guint64 n = (guint64)f[9] + f[10];
+        if (n * 4 > r->left) { bad = "truncated weights"; break; }
+        l->weights = g_new(float, n + 1);
+        memcpy(l->weights, r->p, n * 4);
+        r->p += n * 4;
+        r->left -= n * 4;
+        l->bias = l->weights + f[9];
+        ready[l->out] = 1;
+    }
+    g_free(ready);
+    return bad;
+}
+
+static const char *read_model(segment_model *m, reader *r) {
+    if (r->left < 4 || memcmp(r->p, "YSM1", 4) != 0) return "not a .ysm file";
+    r->p += 4;
+    r->left -= 4;
+    guint32 in_h = read_u32(r), in_w = read_u32(r);
+    m->norm_scale = read_f32(r);
+    m->norm_offset = read_f32(r);
+    guint32 invert = read_u32(r), tensors = read_u32(r), layers = read_u32(r);
+    guint32 input = read_u32(r), output = read_u32(r);
+    if (!r->ok) return "truncated header";
+    if (tensors < 2 || tensors > YSM_MAX_TENSORS || layers < 1 || layers > YSM_MAX_LAYERS ||
+        input >= tensors || output >= tensors || invert > 1 ||
+        !isfinite(m->norm_scale) || !isfinite(m->norm_offset))
+        return "bad header";
+    m->in_h = field(in_h);
+    m->in_w = field(in_w);
+    m->invert = invert;
+    m->input = input;
+    m->output = output;
+    const char *bad = read_tensors(m, r, tensors);
+    if (bad) return bad;
+    seg_dims in = m->dims[input], out = m->dims[output];
+    if (in.h != m->in_h || in.w != m->in_w || in.c != 3 || out.h != m->in_h || out.w != m->in_w || out.c != 1)
+        return "bad input or output shape";
+    if ((bad = read_layers(m, r, layers))) return bad;
+    return r->left ? "trailing bytes" : NULL;
+}
+
+segment_model *segment_load(const guint8 *data, size_t size, GError **err) {
+    reader r = {data, size, 1};
+    segment_model *m = g_new0(segment_model, 1);
+    const char *problem = read_model(m, &r);
+    if (!problem) return m;
+    g_set_error(err, G_FILE_ERROR, G_FILE_ERROR_INVAL, "Invalid segmentation model: %s", problem);
+    segment_free(m);
+    return NULL;
+}
+
+void segment_free(segment_model *m) {
+    if (!m) return;
+    for (int i = 0; i < m->tensor_count; i++) g_free(m->act[i]);
+    for (int i = 0; i < m->layer_count; i++) g_free(m->layers[i].weights);
+    g_free(m->act);
+    g_free(m->dims);
+    g_free(m->layers);
+    g_free(m);
+}
+
+void segment_input_size(const segment_model *m, int *w, int *h) {
+    *w = m->in_w;
+    *h = m->in_h;
+}
+
+static void run_layer(segment_model *m, const seg_layer *l) {
+    seg_dims di = m->dims[l->in0], dout = m->dims[l->out];
+    const float *in = m->act[l->in0];
+    float *out = m->act[l->out];
+    size_t n = (size_t)dout.h * dout.w * dout.c;
+    seg_conv_args a = {in, di, l->weights, l->bias, l->kh, l->kw, l->stride, l->pad_top, l->pad_left, out, dout};
+    switch (l->op) {
+    case OP_CONV: seg_conv(&a); break;
+    case OP_DWCONV: seg_dwconv(&a); break;
+    case OP_TCONV: seg_tconv(&a); break;
+    case OP_RELU: seg_relu(in, out, n); break;
+    case OP_HSWISH: seg_hswish(in, out, n); break;
+    case OP_SIGMOID: seg_sigmoid(in, out, n); break;
+    case OP_MEAN: seg_mean(in, di, out); break;
+    case OP_MUL: seg_mul_channels(in, m->act[l->in1], di, out); break;
+    case OP_ADD: seg_add(in, m->act[l->in1], out, n); break;
+    case OP_RESIZE: seg_resize(in, di, out, dout); break;
+    }
+}
+
+void segment_run(segment_model *m, const guint8 *rgb, float *mask) {
+    float *in = m->act[m->input];
+    size_t n = (size_t)m->in_w * m->in_h;
+    for (size_t i = 0; i < n * 3; i++) in[i] = rgb[i] * m->norm_scale + m->norm_offset;
+    for (int i = 0; i < m->layer_count; i++) run_layer(m, &m->layers[i]);
+    const float *out = m->act[m->output];
+    for (size_t i = 0; i < n; i++) mask[i] = m->invert ? 1 - out[i] : out[i];
+}

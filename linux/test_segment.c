@@ -71,12 +71,59 @@ static void test_small_ops(void) {
     EXPECT(close_to(p[0], 12) && close_to(p[1], 103), "Add is element-wise");
 }
 
+#define HEADER_TENSOR_COUNT 24   /* Offset of tensor_count in the .ysm header. */
+#define HEADER_SIZE 40
+
+static guint8 *model_copy(seg_variant v, size_t *size) {
+    const guint8 *data = background_model_bytes(v, size);
+    return g_memdup2(data, *size);
+}
+
+static int loads(const guint8 *data, size_t size) {
+    GError *err = NULL;
+    segment_model *m = segment_load(data, size, &err);
+    int ok = m != NULL;
+    EXPECT(ok || (err && strstr(err->message, "Invalid segmentation model")), "A rejected model explains why");
+    segment_free(m);
+    g_clear_error(&err);
+    return ok;
+}
+
+static void test_loader(void) {
+    for (int v = 0; v < SEG_VARIANTS; v++) {
+        size_t size;
+        guint8 *d = model_copy(v, &size);
+        EXPECT(loads(d, size), "The embedded models load");
+        EXPECT(!loads(d, size / 2), "A truncated model is rejected");
+        EXPECT(!loads(d, 3), "A model shorter than its magic is rejected");
+        d[0] = 'X';
+        EXPECT(!loads(d, size), "A file that is not .ysm is rejected");
+        d[0] = 'Y';
+        guint32 tensors;
+        memcpy(&tensors, d + HEADER_TENSOR_COUNT, 4);
+        size_t first_layer = HEADER_SIZE + 12 * (size_t)tensors;
+        guint32 saved, bad = 999999;
+        memcpy(&saved, d + first_layer + 4, 4);              /* in0 */
+        memcpy(d + first_layer + 4, &bad, 4);
+        EXPECT(!loads(d, size), "A tensor index out of range is rejected");
+        memcpy(d + first_layer + 4, &saved, 4);
+        memcpy(&saved, d + first_layer + 36, 4);             /* weight_count */
+        guint32 more = saved + 1;
+        memcpy(d + first_layer + 36, &more, 4);
+        EXPECT(!loads(d, size), "Weights that do not match the shapes are rejected");
+        memcpy(d + first_layer + 36, &saved, 4);
+        EXPECT(loads(d, size), "Restoring the bytes makes the model valid again");
+        g_free(d);
+    }
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     test_conv();
     test_dwconv();
     test_tconv();
     test_small_ops();
+    test_loader();
     printf("Passed %d segmentation checks.\n", Checks);
     return 0;
 }

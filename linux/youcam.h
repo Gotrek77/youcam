@@ -373,4 +373,16 @@ int app_panel_visible(void);
 void app_quit(void);
 void app_show_message(const char *title, const char *text, GtkMessageType type);
 
+typedef struct segment_model segment_model;
+segment_model *segment_load(const guint8 *data, size_t size, GError **err);
+void segment_free(segment_model *m);
+void segment_input_size(const segment_model *m, int *w, int *h);
+/* rgb: packed 8-bit RGB at the input size; mask: person confidence 0...1, input size. */
+void segment_run(segment_model *m, const guint8 *rgb, float *mask);
+
+/* ---------------------------------------------------------- background.c --- */
+
+typedef enum { SEG_LANDSCAPE, SEG_SQUARE, SEG_VARIANTS } seg_variant;
+const guint8 *background_model_bytes(seg_variant v, size_t *size);
+
 #endif

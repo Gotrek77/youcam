@@ -8,7 +8,7 @@ CFLAGS ?= -O2
 CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
-CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o segment.o
+CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o segment.o background.o
 MEDIA := writer.o audio.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
@@ -36,6 +36,12 @@ make-icon: make_icon.o
 $(APP) tests.o test_media.o test_segment.o make_icon.o: youcam.h
 
 segment.o: CFLAGS += -O3
+
+# Person segmentation: MediaPipe Selfie Segmentation (vendor/selfie, Apache 2.0), converted to .ysm.
+selfie_%.h: vendor/selfie/selfie_%.ysm
+	cd vendor/selfie && xxd -i selfie_$*.ysm > ../../$@
+
+background.o: selfie_landscape.h selfie_square.h
 
 # Face detection: pico (vendor/pico, MIT) with its cascade compiled in.
 facefinder.h: vendor/pico/facefinder
@@ -74,4 +80,4 @@ uninstall:
 	for s in $(ICON_SIZES); do rm -f $(ICONDIR)/$${s}x$${s}/apps/youcam.png; done
 
 clean:
-	rm -rf *.o facefinder.h youcam tests test-media test-segment make-icon icons
+	rm -rf *.o facefinder.h selfie_*.h youcam tests test-media test-segment make-icon icons

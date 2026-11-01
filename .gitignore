@@ -6,6 +6,8 @@ linux/*.o
 linux/youcam
 linux/tests
 linux/test-media
+linux/test-segment
 linux/make-icon
 linux/icons/
 linux/facefinder.h
+linux/selfie_*.h
