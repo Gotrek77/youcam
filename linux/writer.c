@@ -29,6 +29,7 @@ struct writer {
     GstPad *camera_pad;         /* Its compositor pad. */
     GstElement *outsize;        /* Pins the compositor output to the screen size. */
     int camera_w, camera_h;
+    gint screen_seen;           /* The screen reached the compositor (atomic). */
 };
 
 /* The movie size is the cropped stream size, known once caps flow. */
@@ -59,6 +60,19 @@ static GstPadProbeReturn size_probe(GstPad *pad, GstPadProbeInfo *info, gpointer
         gst_caps_unref(size);
     }
     return GST_PAD_PROBE_OK;
+}
+
+/* A live compositor starts on its timeout, before PipeWire delivers the
+ * screen, and would open the movie with frames of its black background. */
+static GstPadProbeReturn screen_arrived(GstPad *pad, GstPadProbeInfo *info, gpointer data) {
+    (void)pad; (void)info;
+    g_atomic_int_set(&((writer *)data)->screen_seen, 1);
+    return GST_PAD_PROBE_REMOVE;
+}
+
+static GstPadProbeReturn drop_until_screen(GstPad *pad, GstPadProbeInfo *info, gpointer data) {
+    (void)pad; (void)info;
+    return g_atomic_int_get(&((writer *)data)->screen_seen) ? GST_PAD_PROBE_REMOVE : GST_PAD_PROBE_DROP;
 }
 
 int writer_output_size(writer *w, int *width, int *height) {
@@ -323,6 +337,12 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
         GstElement *comp = gst_bin_get_by_name(GST_BIN(p), "comp");
         w->camera_pad = gst_element_get_static_pad(comp, "sink_1");
         w->outsize = gst_bin_get_by_name(GST_BIN(p), "outsize");
+        GstPad *screen = gst_element_get_static_pad(comp, "sink_0");
+        gst_pad_add_probe(screen, GST_PAD_PROBE_TYPE_BUFFER, screen_arrived, w, NULL);
+        gst_object_unref(screen);
+        GstPad *out = gst_element_get_static_pad(w->outsize, "src");
+        gst_pad_add_probe(out, GST_PAD_PROBE_TYPE_BUFFER, drop_until_screen, w, NULL);
+        gst_object_unref(out);
         gst_object_unref(comp);
         g_object_set(w->camera_pad, "alpha", 0.0, "zorder", 1, NULL);
         w->camera_w = w->camera_h = 2;
