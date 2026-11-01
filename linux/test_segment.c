@@ -201,6 +201,8 @@ static void test_golden(void) {
     }
 }
 
+#define IDLE_THREADS_GONE_MS 1000
+
 static void test_edge_cases(void) {
     segment_model *m = load_variant(SEG_LANDSCAPE);
     int w, h;
@@ -217,6 +219,10 @@ static void test_edge_cases(void) {
     EXPECT(people < w * h / 20, "A black frame has (almost) no person");
     g_free(black); g_free(mask);
     segment_free(m);
+    /* Stopped threads leave the unused count as they wake, a moment later;
+     * without the stop they would linger there for about 15 s. */
+    for (int ms = 0; ms < IDLE_THREADS_GONE_MS && g_thread_pool_get_num_unused_threads(); ms++) g_usleep(1000);
+    EXPECT(g_thread_pool_get_num_unused_threads() == 0, "Freeing the last model leaves no idle worker threads");
 }
 
 /* Not a pass/fail check: the spec's budget is about 5 ms per inference. */

@@ -390,6 +390,8 @@ void seg_mul_channels(const float *in, const float *scale, seg_dims d, float *ou
 void seg_add(const float *a, const float *b, float *out, size_t n);
 
 typedef struct segment_model segment_model;
+/* Load and free, like run, from one thread at a time: they count live
+ * models and create or free the shared worker threads without a lock. */
 segment_model *segment_load(const guint8 *data, size_t size, GError **err);
 void segment_free(segment_model *m);
 void segment_input_size(const segment_model *m, int *w, int *h);

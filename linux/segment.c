@@ -17,6 +17,7 @@
 
 #define SEG_MIN_ROWS_PER_JOB 4   /* Smaller jobs cost more to hand out than they save. */
 #define SEG_MAX_THREADS 8
+#define SEG_PARK_WAIT_MS 50      /* Upper bound on waiting for freed threads to park. */
 
 typedef struct {
     void (*fn)(const seg_conv_args *, int, int);
@@ -24,8 +25,9 @@ typedef struct {
     int y0, y1;
 } seg_job;
 
-/* One pool shared by all callers: segment_run is only ever called from one
- * thread at a time (the background worker, and the tests). */
+/* One pool shared by all callers: segment_load, segment_free and segment_run
+ * are only ever called from one thread at a time (the background worker, and
+ * the tests), so LiveModels and Pool need no lock. */
 static GThreadPool *Pool;
 static GMutex PoolLock;
 static GCond PoolDone;
@@ -62,8 +64,10 @@ static void run_rows(void (*fn)(const seg_conv_args *, int, int), const seg_conv
     PoolPending = jobs - 1;
     g_mutex_unlock(&PoolLock);
     for (int i = 0; i < jobs; i++) job[i] = (seg_job){fn, a, rows * i / jobs, rows * (i + 1) / jobs};
-    for (int i = 1; i < jobs; i++)
-        if (!g_thread_pool_push(Pool, &job[i], NULL)) pool_work(&job[i], NULL);   /* Never wait for a job nobody runs. */
+    /* The pool is exclusive and new_full already started every thread, so a
+     * push never has to spawn one and cannot fail. A FALSE return would not
+     * mean "not queued" anyway: GLib keeps the job and runs it later. */
+    for (int i = 1; i < jobs; i++) g_thread_pool_push(Pool, &job[i], NULL);
     fn(a, job[0].y0, job[0].y1);   /* This thread does the first share. */
     g_mutex_lock(&PoolLock);
     while (PoolPending) g_cond_wait(&PoolDone, &PoolLock);
@@ -392,8 +396,15 @@ void segment_free(segment_model *m) {
     if (!m) return;
     /* Idle workers would otherwise outlive the background mode that wanted them. */
     if (--LiveModels == 0 && Pool) {
+        guint threads = g_thread_pool_get_num_threads(Pool);
         g_thread_pool_free(Pool, FALSE, TRUE);
         Pool = NULL;
+        /* Freed threads park as "unused" for ~15 s, but only a moment after
+         * the free returns: stopping them at once would miss some. Off must
+         * leave no thread, so wait (briefly, bounded) for them to park. */
+        for (int ms = 0; ms < SEG_PARK_WAIT_MS && g_thread_pool_get_num_unused_threads() < threads; ms++)
+            g_usleep(1000);
+        g_thread_pool_stop_unused_threads();
     }
     for (int i = 0; i < m->tensor_count; i++) g_free(m->act[i]);
     for (int i = 0; i < m->layer_count; i++) g_free(m->layers[i].weights);
