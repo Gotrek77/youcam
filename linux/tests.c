@@ -118,12 +118,19 @@ static void test_audio_gain(void) {
 static void test_files_and_labels(void) {
     char *dir = g_dir_make_tmp("youcam-tests-XXXXXX", NULL);
     time_t when = 1790066001;
-    char *first = recording_next_path(dir, when);
+    char *first = recording_next_path(dir, when, NULL);
     g_file_set_contents(first, "existing movie", -1, NULL);
-    char *second = recording_next_path(dir, when);
+    char *second = recording_next_path(dir, when, "mov");
     EXPECT(strcmp(first, second) != 0 && g_str_has_suffix(second, "-2.mov"),
            "Automatic file naming never overwrites an existing recording");
     EXPECT(!strchr(strrchr(second, '/'), ':'), "Recording filenames are safe in file managers");
+    char *mkv = recording_next_path(dir, when, "mkv");
+    EXPECT(g_str_has_suffix(mkv, ".mkv") && !g_str_has_suffix(mkv, "-2.mkv"),
+           "The chosen container sets the extension; another format does not collide");
+    g_free(mkv);
+    EXPECT(strcmp(container_for(NULL)->ext, "mov") == 0 && strcmp(container_for("webm")->ext, "mov") == 0,
+           "A missing or unknown container preference records MOV, like macOS");
+    EXPECT(strcmp(container_for("avi")->muxer, "avimux") == 0, "AVI uses the AVI muxer");
     EXPECT(strstr(first, "/YouCam-Recording-") != NULL, "Movies use the macOS naming scheme");
     g_unlink(first);
     g_rmdir(dir);

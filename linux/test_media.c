@@ -140,6 +140,24 @@ int main(int argc, char **argv) {
     gst_discoverer_info_unref(info);
     g_unlink(path);
 
+    /* Every other container: readable, both tracks, pause removed. */
+    for (int i = 1; i < CONTAINER_COUNT; i++) {
+        char *name = g_strdup_printf("format.%s", Containers[i].ext);
+        char *other = g_build_filename(dir, name, NULL);
+        info = record(other, 1, 1, 0);
+        double d = (double)gst_discoverer_info_get_duration(info) / GST_SECOND;
+        videos = gst_discoverer_info_get_video_streams(info);
+        audios = gst_discoverer_info_get_audio_streams(info);
+        EXPECT(videos && audios, "%s holds video and audio", Containers[i].label);
+        EXPECT(fabs(d - 2 * RECORD_S) < PAUSE_S / 2.0, "%s duration %.2fs", Containers[i].label, d);
+        gst_discoverer_stream_info_list_free(videos);
+        gst_discoverer_stream_info_list_free(audios);
+        gst_discoverer_info_unref(info);
+        g_unlink(other);
+        g_free(other);
+        g_free(name);
+    }
+
     /* Camera layer through the compositor, with a pause. */
     info = record(path, 1, 1, 1);
     double layered = (double)gst_discoverer_info_get_duration(info) / GST_SECOND;
@@ -155,6 +173,6 @@ int main(int argc, char **argv) {
     g_unlink(path);
     g_rmdir(dir);
     printf("media ok: %.2fs 640x360 .mov with audio, pause removed; silent movie has no audio track; "
-           "camera layer movie %.2fs with %d composited frames\n", duration, layered, LayerFrames);
+           "camera layer movie %.2fs with %d composited frames; mp4, mkv and avi ok\n", duration, layered, LayerFrames);
     return 0;
 }

@@ -151,7 +151,7 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
             return;
         }
     }
-    char *path = recording_next_path(recordings_dir(), time(NULL));
+    char *path = recording_next_path(recordings_dir(), time(NULL), Prefs.container);
     char *video = g_strdup_printf(
         "pipewiresrc fd=%d path=%u do-timestamp=true always-copy=true keepalive-time=1000", fd, node);
     GError *err = NULL;

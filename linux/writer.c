@@ -160,7 +160,12 @@ static void on_eos(GstBus *bus, GstMessage *msg, gpointer data) {
 static void on_error(GstBus *bus, GstMessage *msg, gpointer data) {
     (void)bus;
     GError *err = NULL;
-    gst_message_parse_error(msg, &err, NULL);
+    char *debug = NULL;
+    gst_message_parse_error(msg, &err, &debug);
+    /* The dialog shows the short message; the log keeps which element failed and why. */
+    g_printerr("youcam: recording error from %s: %s\n%s\n", GST_OBJECT_NAME(GST_MESSAGE_SRC(msg)),
+               err ? err->message : "?", debug ? debug : "");
+    g_free(debug);
     char *text = g_strdup(err ? err->message : "The movie could not be written.");
     g_clear_error(&err);
     complete(data, text);
@@ -273,8 +278,8 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
         : "";
     char *desc = g_strdup_printf(
         "%s ! videoconvert ! videocrop name=crop ! videorate ! video/x-raw,framerate=30/1 ! %s"
-        "%s ! h264parse ! queue ! mux. %sqtmux name=mux ! filesink name=file",
-        video_source, layer, video_encoder(), audio);
+        "%s ! h264parse ! queue ! mux. %s%s name=mux ! filesink name=file",
+        video_source, layer, video_encoder(), audio, container_for(strrchr(path, '.') ? strrchr(path, '.') + 1 : NULL)->muxer);
     GstElement *p = gst_parse_launch(desc, err);
     g_free(desc);
     g_free(audio);
@@ -368,7 +373,7 @@ double writer_elapsed(writer *w) {
     return (end - w->started - w->paused_total) / 1e6;
 }
 
-/* EOS lets qtmux write the movie index; 'finished' or 'failed' follows. */
+/* EOS lets the muxer write the movie index; 'finished' or 'failed' follows. */
 void writer_finish(writer *w) {
     if (w->timeout) return;
     writer_resume(w);

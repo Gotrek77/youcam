@@ -239,6 +239,11 @@ void app_show_message(const char *title, const char *text, GtkMessageType type) 
 
 static void recording_error(const char *message) {
     if (App.quitting || App.smoke) return;
+    if (g_getenv("YOUCAM_NO_DIALOGS")) {   /* --record-test: report, never block. */
+        g_printerr("youcam: recording stopped: %s\n", message);
+        app_quit();
+        return;
+    }
     app_show_message("Recording stopped", message, GTK_MESSAGE_WARNING);
 }
 
@@ -586,6 +591,21 @@ static void open_sound_settings(void) {
         g_spawn_command_line_async("pavucontrol", NULL);
 }
 
+/* Linux addition: the file format of the next recordings. */
+static void select_container(const char *ext) {
+    g_free(Prefs.container);
+    Prefs.container = g_strdup(container_for(ext)->ext);
+    prefs_save();
+}
+
+static void build_format_menu(GtkWidget *menu) {
+    const char *current = container_for(Prefs.container)->ext;
+    for (int i = 0; i < CONTAINER_COUNT; i++)
+        add_choice(menu, Containers[i].label, Containers[i].ext,
+                   strcmp(current, Containers[i].ext) == 0, 1, select_container);
+    gtk_widget_show_all(menu);
+}
+
 /* Linux addition: applied when a recording starts, so it is locked while recording. */
 static void select_noise_level(const char *value) {
     Prefs.noise_reduction = noise_reduction_clamp(atoi(value));
@@ -645,6 +665,7 @@ GtkWidget *app_build_menu(void) {
     gtk_menu_item_set_submenu(GTK_MENU_ITEM(area_item), app_build_area_menu());
     gtk_widget_set_sensitive(area_item, !busy && !selecting);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), area_item);
+    build_format_menu(add_submenu(menu, "Recording Format", !busy));
     add_item(menu, App.panel_visible ? "Hide Recording Panel" : "Show Recording Panel", app_toggle_panel, 1);
     if (!hotkeys_available()) add_item(menu, "Global shortcuts unavailable", NULL, 0);
     if (recording_last_path()) add_item(menu, "Show Last Recording in Files", reveal_recording, 1);

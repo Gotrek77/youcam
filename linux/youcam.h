@@ -72,7 +72,13 @@ double gain_db_clamp(double db);
 #define NOISE_REDUCTION_DEFAULT 2    /* Moderate: removes room hum, keeps the voice natural. */
 int noise_reduction_clamp(int level);
 float gain_from_db(double db);
-char *recording_next_path(const char *dir, time_t when);
+char *recording_next_path(const char *dir, time_t when, const char *ext);
+
+/* Linux addition: the recording container. Every one holds H.264 + AAC. */
+typedef struct { const char *ext, *muxer, *label; } container;
+extern const container Containers[];
+#define CONTAINER_COUNT 4
+const container *container_for(const char *ext);   /* Unknown: the default, MOV. */
 void recording_time_label(double seconds, char *buf, size_t len);
 void crop_pixels(rect fraction, int frame_w, int frame_h, int *left, int *right, int *top, int *bottom);
 
@@ -107,6 +113,7 @@ typedef struct {
     int record_transparency; /* Apply it to the saved video too. */
     int center_stage;      /* Follow the face (default on). */
     int noise_reduction;   /* Linux only: 0 off, 1...4 = WebRTC suppression low...very high. */
+    char *container;       /* Linux only: file extension of Containers[], NULL = mov. */
 } prefs;
 
 extern prefs Prefs;

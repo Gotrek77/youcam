@@ -39,9 +39,24 @@ int noise_reduction_clamp(int level) {
 
 float gain_from_db(double db) { return powf(10, gain_db_clamp(db) / 20); }
 
-/* YouCam-Recording-<ddMMM-HH.mm.ss>.mov, never overwriting: -2, -3, ...
+/* MOV first: the macOS default. MKV stays playable if YouCam is killed
+ * mid-recording; MOV and MP4 need their index written at the end. */
+const container Containers[CONTAINER_COUNT] = {
+    {"mov", "qtmux", "MOV (QuickTime)"},
+    {"mp4", "mp4mux", "MP4"},
+    {"mkv", "matroskamux", "MKV (Matroska)"},
+    {"avi", "avimux", "AVI"},
+};
+
+const container *container_for(const char *ext) {
+    for (int i = 0; ext && i < CONTAINER_COUNT; i++)
+        if (strcmp(ext, Containers[i].ext) == 0) return &Containers[i];
+    return &Containers[0];
+}
+
+/* YouCam-Recording-<ddMMM-HH.mm.ss>.<ext>, never overwriting: -2, -3, ...
  * Month names are always English (en_US_POSIX on macOS). Caller frees. */
-char *recording_next_path(const char *dir, time_t when) {
+char *recording_next_path(const char *dir, time_t when, const char *ext) {
     static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     struct tm tm;
@@ -49,10 +64,11 @@ char *recording_next_path(const char *dir, time_t when) {
     char base[64];
     snprintf(base, sizeof(base), "YouCam-Recording-%02d%s-%02d.%02d.%02d",
              tm.tm_mday, months[tm.tm_mon], tm.tm_hour, tm.tm_min, tm.tm_sec);
-    char *path = g_strdup_printf("%s/%s.mov", dir, base);
+    ext = container_for(ext)->ext;
+    char *path = g_strdup_printf("%s/%s.%s", dir, base, ext);
     for (int suffix = 2; g_file_test(path, G_FILE_TEST_EXISTS); suffix++) {
         g_free(path);
-        path = g_strdup_printf("%s/%s-%d.mov", dir, base, suffix);
+        path = g_strdup_printf("%s/%s-%d.%s", dir, base, suffix, ext);
     }
     return path;
 }

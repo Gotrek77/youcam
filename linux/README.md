@@ -35,6 +35,11 @@ need. `make uninstall` removes everything `make install` added.
   level meter. System/app audio is not recorded. **Noise Reduction** (Linux
   only: Off, Low, Moderate, High, Very High; default Moderate) removes hum and
   room noise from the recorded microphone with WebRTC noise suppression.
+- **Recording Format** (Linux only) picks the container: MOV (default, like
+  macOS), MP4, MKV or AVI, all H.264 + AAC. MKV stays playable even if
+  YouCam is killed mid-recording.
+- Video is encoded on the GPU when possible (Intel VA-API, then NVIDIA NVENC,
+  then x264 in software). `YOUCAM_ENCODER=va|nvenc|x264` forces one.
 - **Transparency** optionally makes the camera see-through so you can see
   what it covers. Adjust the slider from 0% to 80%, or choose **Reset
   Transparency to 0%** to turn it off. Check **Apply Transparency to Saved
