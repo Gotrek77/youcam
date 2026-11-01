@@ -15,10 +15,47 @@
 #define HOT
 #endif
 
-/* ponytail: one thread. Split rows across a GThreadPool here if the
- * benchmark misses its budget (Task 7). */
+#define SEG_MIN_ROWS_PER_JOB 4   /* Smaller jobs cost more to hand out than they save. */
+#define SEG_MAX_THREADS 8
+
+typedef struct {
+    void (*fn)(const seg_conv_args *, int, int);
+    const seg_conv_args *a;
+    int y0, y1;
+} seg_job;
+
+/* One pool shared by all callers: segment_run is only ever called from one
+ * thread at a time (the background worker, and the tests). */
+static GThreadPool *Pool;
+static GMutex PoolLock;
+static GCond PoolDone;
+static int PoolPending;
+
+static void pool_work(gpointer data, gpointer unused) {
+    (void)unused;
+    seg_job *j = data;
+    j->fn(j->a, j->y0, j->y1);
+    g_mutex_lock(&PoolLock);
+    if (--PoolPending == 0) g_cond_signal(&PoolDone);
+    g_mutex_unlock(&PoolLock);
+}
+
+/* Splits the output rows across a few threads and waits for them. */
 static void run_rows(void (*fn)(const seg_conv_args *, int, int), const seg_conv_args *a) {
-    fn(a, 0, a->out_dims.h);
+    int rows = a->out_dims.h;
+    int jobs = MIN(MIN(SEG_MAX_THREADS, (int)g_get_num_processors()), rows / SEG_MIN_ROWS_PER_JOB);
+    if (jobs < 2) { fn(a, 0, rows); return; }
+    if (!Pool) Pool = g_thread_pool_new(pool_work, NULL, jobs - 1, TRUE, NULL);
+    seg_job job[SEG_MAX_THREADS];
+    g_mutex_lock(&PoolLock);
+    PoolPending = jobs - 1;
+    g_mutex_unlock(&PoolLock);
+    for (int i = 0; i < jobs; i++) job[i] = (seg_job){fn, a, rows * i / jobs, rows * (i + 1) / jobs};
+    for (int i = 1; i < jobs; i++) g_thread_pool_push(Pool, &job[i], NULL);
+    fn(a, job[0].y0, job[0].y1);   /* This thread does the first share. */
+    g_mutex_lock(&PoolLock);
+    while (PoolPending) g_cond_wait(&PoolDone, &PoolLock);
+    g_mutex_unlock(&PoolLock);
 }
 
 HOT static void conv_rows(const seg_conv_args *a, int y0, int y1) {

@@ -14,7 +14,7 @@ APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
 ICON_SIZES := 16 32 48 128 256 512
 
-.PHONY: all test smoke-test install uninstall clean
+.PHONY: all test bench-segment smoke-test install uninstall clean
 
 all: youcam
 
@@ -29,6 +29,9 @@ test-media: test_media.o $(MEDIA) $(CORE)
 
 test-segment: test_segment.o $(CORE)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
+bench-segment: test-segment
+	./test-segment --bench
 
 make-icon: make_icon.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)

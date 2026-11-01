@@ -219,8 +219,29 @@ static void test_edge_cases(void) {
     segment_free(m);
 }
 
+/* Not a pass/fail check: the spec's budget is about 5 ms per inference. */
+#define BENCH_RUNS 200
+
+static void bench(void) {
+    for (int v = 0; v < SEG_VARIANTS; v++) {
+        segment_model *m = load_variant(v);
+        int w, h;
+        segment_input_size(m, &w, &h);
+        guint8 *rgb = g_malloc((size_t)w * h * 3);
+        for (int i = 0; i < w * h * 3; i++) rgb[i] = (guint8)(i * 31);
+        float *mask = g_new(float, (size_t)w * h);
+        segment_run(m, rgb, mask);   /* Warm up. */
+        gint64 start = g_get_monotonic_time();
+        for (int i = 0; i < BENCH_RUNS; i++) segment_run(m, rgb, mask);
+        printf("%s: %.2f ms per inference\n", VariantNames[v],
+               (g_get_monotonic_time() - start) / 1000.0 / BENCH_RUNS);
+        g_free(rgb); g_free(mask);
+        segment_free(m);
+    }
+}
+
 int main(int argc, char **argv) {
-    (void)argc; (void)argv;
+    if (argc > 1 && strcmp(argv[1], "--bench") == 0) { bench(); return 0; }
     test_conv();
     test_dwconv();
     test_tconv();
