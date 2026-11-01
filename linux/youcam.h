@@ -331,6 +331,28 @@ int mutter_monitor_rect(GVariant *state, const char *connector, int out[4]);
 void mutter_cast_start(const char *connector, screencast_ready ready, portal_error error, void *ud);
 void mutter_cast_stop(const char *session);
 
+/* ----------------------------------------------------------- segment.c --- */
+
+typedef struct { int h, w, c; } seg_dims;   /* An NHWC tensor, batch 1. */
+
+typedef struct {
+    const float *in; seg_dims in_dims;
+    const float *weights, *bias;   /* Weights [kh][kw][in c][out c]; depthwise [kh][kw][c]. */
+    int kh, kw, stride, pad_top, pad_left;
+    float *out; seg_dims out_dims;
+} seg_conv_args;
+
+void seg_conv(const seg_conv_args *a);
+void seg_dwconv(const seg_conv_args *a);
+void seg_tconv(const seg_conv_args *a);      /* Kernel == stride, no padding. */
+void seg_resize(const float *in, seg_dims di, float *out, seg_dims dout);
+void seg_mean(const float *in, seg_dims di, float *out);
+void seg_relu(const float *in, float *out, size_t n);
+void seg_hswish(const float *in, float *out, size_t n);
+void seg_sigmoid(const float *in, float *out, size_t n);
+void seg_mul_channels(const float *in, const float *scale, seg_dims d, float *out);
+void seg_add(const float *a, const float *b, float *out, size_t n);
+
 /* --------------------------------------------------------------- app.c --- */
 
 void app_startup(GtkApplication *gapp, int smoke_test);

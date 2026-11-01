@@ -8,7 +8,7 @@ CFLAGS ?= -O2
 CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
-CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o
+CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o segment.o
 MEDIA := writer.o audio.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
@@ -27,10 +27,15 @@ tests: tests.o $(CORE)
 test-media: test_media.o $(MEDIA) $(CORE)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
+test-segment: test_segment.o $(CORE)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+
 make-icon: make_icon.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-$(APP) tests.o test_media.o make_icon.o: youcam.h
+$(APP) tests.o test_media.o test_segment.o make_icon.o: youcam.h
+
+segment.o: CFLAGS += -O3
 
 # Face detection: pico (vendor/pico, MIT) with its cascade compiled in.
 facefinder.h: vendor/pico/facefinder
@@ -41,8 +46,9 @@ center_stage.o: facefinder.h vendor/pico/picornt.h
 picornt.o: vendor/pico/picornt.c vendor/pico/picornt.h
 	$(CC) $(CFLAGS) -Wno-maybe-uninitialized -c -o $@ $<
 
-test: tests test-media
+test: tests test-media test-segment
 	./tests
+	./test-segment
 	./test-media
 
 smoke-test: youcam
@@ -68,4 +74,4 @@ uninstall:
 	for s in $(ICON_SIZES); do rm -f $(ICONDIR)/$${s}x$${s}/apps/youcam.png; done
 
 clean:
-	rm -rf *.o facefinder.h youcam tests test-media make-icon icons
+	rm -rf *.o facefinder.h youcam tests test-media test-segment make-icon icons
