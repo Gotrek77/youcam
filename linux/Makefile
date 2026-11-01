@@ -7,7 +7,7 @@ CFLAGS ?= -O2
 CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
-CORE := geometry.o support.o prefs.o
+CORE := geometry.o support.o prefs.o camera_layer.o
 MEDIA := writer.o audio.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
@@ -29,7 +29,7 @@ test-media: test_media.o $(MEDIA) $(CORE)
 make-icon: make_icon.o
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-$(APP) tests.o test_media.o: youcam.h
+$(APP) tests.o test_media.o make_icon.o: youcam.h
 
 test: tests test-media
 	./tests

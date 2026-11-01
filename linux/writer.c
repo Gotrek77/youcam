@@ -7,6 +7,7 @@
  * produces frames thanks to pipewiresrc's keepalive and videorate, so the
  * movie always lasts until the real stop time. */
 
+#include <string.h>
 #include <glib/gstdio.h>
 #include "youcam.h"
 
@@ -23,7 +24,67 @@ struct writer {
     guint timeout;
     gint64 started, paused_at, paused_total;
     int done;
+    gint out_w, out_h;          /* Movie size, set from the streaming thread. */
+    GstElement *camera;         /* appsrc of the camera layer, or NULL. */
+    GstPad *camera_pad;         /* Its compositor pad. */
+    int camera_w, camera_h;
 };
+
+/* The movie size is the cropped stream size, known once caps flow. */
+static GstPadProbeReturn size_probe(GstPad *pad, GstPadProbeInfo *info, gpointer data) {
+    (void)pad;
+    writer *w = data;
+    GstEvent *ev = GST_PAD_PROBE_INFO_EVENT(info);
+    if (GST_EVENT_TYPE(ev) != GST_EVENT_CAPS) return GST_PAD_PROBE_OK;
+    GstCaps *caps;
+    gst_event_parse_caps(ev, &caps);
+    int width = 0, height = 0;
+    GstStructure *s = gst_caps_get_structure(caps, 0);
+    gst_structure_get_int(s, "width", &width);
+    gst_structure_get_int(s, "height", &height);
+    g_atomic_int_set(&w->out_h, height);
+    g_atomic_int_set(&w->out_w, width);
+    return GST_PAD_PROBE_OK;
+}
+
+int writer_output_size(writer *w, int *width, int *height) {
+    *width = g_atomic_int_get(&w->out_w);
+    *height = g_atomic_int_get(&w->out_h);
+    return *width > 0 && *height > 0;
+}
+
+static void set_camera_caps(writer *w, int width, int height) {
+    GstCaps *caps = gst_caps_new_simple("video/x-raw", "format", G_TYPE_STRING, "BGRA",
+        "width", G_TYPE_INT, width, "height", G_TYPE_INT, height,
+        "framerate", GST_TYPE_FRACTION, 0, 1, NULL);
+    g_object_set(w->camera, "caps", caps, NULL);
+    gst_caps_unref(caps);
+    w->camera_w = width;
+    w->camera_h = height;
+}
+
+/* Camera layer frame, placed at (x, y) in movie pixels. When not visible
+ * the layer is just made transparent; the compositor keeps its last frame. */
+void writer_push_camera(writer *w, const guint8 *bgra, int width, int height, int stride,
+                        int x, int y, int visible) {
+    if (!w->camera || w->done) return;
+    if (!visible) {
+        g_object_set(w->camera_pad, "alpha", 0.0, NULL);
+        return;
+    }
+    if (w->paused_at) return;
+    if (width != w->camera_w || height != w->camera_h) set_camera_caps(w, width, height);
+    GstBuffer *buf = gst_buffer_new_allocate(NULL, (gsize)width * height * 4, NULL);
+    GstMapInfo map;
+    gst_buffer_map(buf, &map, GST_MAP_WRITE);
+    for (int row = 0; row < height; row++)
+        memcpy(map.data + (size_t)row * width * 4, bgra + (size_t)row * stride, (size_t)width * 4);
+    gst_buffer_unmap(buf, &map);
+    GstFlowReturn ret;
+    g_signal_emit_by_name(w->camera, "push-buffer", buf, &ret);
+    gst_buffer_unref(buf);
+    g_object_set(w->camera_pad, "xpos", x, "ypos", y, "width", width, "height", height, "alpha", 1.0, NULL);
+}
 
 /* The portal stream's pixel size is known only once caps arrive. */
 static GstPadProbeReturn crop_probe(GstPad *pad, GstPadProbeInfo *info, gpointer data) {
@@ -67,6 +128,8 @@ static void complete(writer *w, const char *error) {
     /* After an error the sources may be wedged: stop off the main thread. */
     if (error) pipeline_stop_async(w->pipeline);
     else gst_element_set_state(w->pipeline, GST_STATE_NULL);
+    if (w->camera) gst_object_unref(w->camera);
+    if (w->camera_pad) gst_object_unref(w->camera_pad);
     gst_object_unref(w->pipeline);
     if (error) w->cb.failed(error, w->cb.ud);
     else w->cb.finished(w->path, w->cb.ud);
@@ -97,17 +160,24 @@ static gboolean finish_timeout(gpointer data) {
 }
 
 writer *writer_start(const char *path, const char *video_source, GstElement *mic,
-                     const rect *crop_fraction, writer_callbacks cb, GError **err) {
+                     const rect *crop_fraction, int camera_layer, writer_callbacks cb, GError **err) {
     char *audio = mic ? g_strdup_printf(
         "audioconvert name=aconvert ! audioresample ! "
         "audio/x-raw,format=F32LE,channels=1,rate=48000 ! identity name=gain ! "
         "audioconvert ! avenc_aac bitrate=%d ! queue ! mux. ", AUDIO_BITRATE) : g_strdup("");
+    /* Optional camera layer: an appsrc composited over the screen. */
+    const char *layer = camera_layer
+        ? "videoconvert ! comp.sink_0 "
+          "appsrc name=camera is-live=true do-timestamp=true format=time "
+          "caps=video/x-raw,format=BGRA,width=2,height=2,framerate=0/1 ! videoconvert ! comp.sink_1 "
+          "compositor name=comp ignore-inactive-pads=true background=black ! "
+        : "";
     char *desc = g_strdup_printf(
-        "%s ! videoconvert ! videocrop name=crop ! videorate ! video/x-raw,framerate=30/1 ! "
+        "%s ! videoconvert ! videocrop name=crop ! videorate ! video/x-raw,framerate=30/1 ! %s"
         "videoconvert ! video/x-raw,format=I420 ! "
         "x264enc tune=zerolatency speed-preset=veryfast bitrate=%d key-int-max=60 ! "
         "h264parse ! queue ! mux. %sqtmux name=mux ! filesink name=file",
-        video_source, VIDEO_BITRATE_KBPS, audio);
+        video_source, layer, VIDEO_BITRATE_KBPS, audio);
     GstElement *p = gst_parse_launch(desc, err);
     g_free(desc);
     g_free(audio);
@@ -135,13 +205,27 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
     GstElement *file = gst_bin_get_by_name(GST_BIN(p), "file");
     g_object_set(file, "location", path, NULL);
     gst_object_unref(file);
+    GstElement *crop = gst_bin_get_by_name(GST_BIN(p), "crop");
+    GstPad *pad = gst_element_get_static_pad(crop, "src");
+    gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, size_probe, w, NULL);
+    gst_object_unref(pad);
     if (crop_fraction) {
         w->crop = *crop_fraction;
-        GstElement *crop = gst_bin_get_by_name(GST_BIN(p), "crop");
-        GstPad *pad = gst_element_get_static_pad(crop, "sink");
+        pad = gst_element_get_static_pad(crop, "sink");
         gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, crop_probe, w, NULL);
         gst_object_unref(pad);
-        gst_object_unref(crop);
+    }
+    gst_object_unref(crop);
+    if (camera_layer) {
+        w->camera = gst_bin_get_by_name(GST_BIN(p), "camera");
+        GstElement *comp = gst_bin_get_by_name(GST_BIN(p), "comp");
+        w->camera_pad = gst_element_get_static_pad(comp, "sink_1");
+        gst_object_unref(comp);
+        g_object_set(w->camera_pad, "alpha", 0.0, "zorder", 1, NULL);
+        w->camera_w = w->camera_h = 2;
+        guint8 blank[2 * 2 * 4] = {0};
+        writer_push_camera(w, blank, 2, 2, 8, 0, 0, 1);
+        g_object_set(w->camera_pad, "alpha", 0.0, NULL);
     }
     GstBus *bus = gst_element_get_bus(p);
     gst_bus_add_signal_watch(bus);
@@ -155,6 +239,8 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
         gst_bus_remove_signal_watch(bus);
         gst_object_unref(bus);
         gst_element_set_state(p, GST_STATE_NULL);
+        if (w->camera) gst_object_unref(w->camera);
+        if (w->camera_pad) gst_object_unref(w->camera_pad);
         gst_object_unref(p);
         g_unlink(path);
         g_free(w->path);
@@ -201,6 +287,8 @@ void writer_cancel(writer *w) {
     gst_bus_remove_signal_watch(bus);
     gst_object_unref(bus);
     gst_element_set_state(w->pipeline, GST_STATE_NULL);
+    if (w->camera) gst_object_unref(w->camera);
+    if (w->camera_pad) gst_object_unref(w->camera_pad);
     gst_object_unref(w->pipeline);
     g_unlink(path);
     g_free(path);

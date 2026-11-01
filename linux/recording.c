@@ -156,7 +156,7 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
         "pipewiresrc fd=%d path=%u do-timestamp=true always-copy=true keepalive-time=1000", fd, node);
     GError *err = NULL;
     audio_monitor("recording", 1);
-    R.movie = writer_start(path, video, mic, R.has_crop ? &R.crop : NULL,
+    R.movie = writer_start(path, video, mic, R.has_crop ? &R.crop : NULL, 1,
                            (writer_callbacks){movie_finished, movie_failed, NULL}, &err);
     g_free(video);
     g_free(path);
@@ -229,6 +229,17 @@ void recording_fail(const char *message) {
         prefs_set_string(&R.pending_error, message);
         recording_stop();
     }
+}
+
+/* What the camera layer needs: the writer, the recorded monitor (global)
+ * and the recorded part of it (monitor-local). NULL when not recording. */
+writer *recording_layer_target(rect *monitor, rect *region) {
+    if (R.phase != PHASE_RECORDING || !R.movie) return NULL;
+    rect m = R.monitor_geometry;
+    *monitor = m;
+    *region = R.has_crop ? (rect){R.crop.x * m.w, R.crop.y * m.h, R.crop.w * m.w, R.crop.h * m.h}
+                         : (rect){0, 0, m.w, m.h};
+    return R.movie;
 }
 
 void recording_init(void (*on_change)(void), void (*on_error)(const char *)) {

@@ -9,6 +9,7 @@
 #define PANEL_BOTTOM_MARGIN 40
 #define SAVE_DELAY_MS 300
 #define SMOKE_TEST_S 2
+#define LAYER_TICK_MS 33
 
 static const struct { const char *name; int width; } Sizes[] = {
     {"Small", 180}, {"Medium", 280}, {"Large", 400}, {"Extra Large", 560}};
@@ -22,7 +23,11 @@ static const char *HelpText =
     "which screen YouCam may record; the choice is remembered. Movies are saved automatically to "
     "your Desktop. Control–Alt–Super–R starts/stops; Control–Alt–Super–P pauses/resumes.\n\n"
     "Audio Input selects the microphone and offers an input-level slider and live meter.\n\n"
-    "Show Recording Panel displays optional controls. Hide Camera lets you record just the screen.";
+    "Show Recording Panel displays optional controls. Hide Camera lets you record just the screen.\n\n"
+    "Transparency optionally lets you see through the camera while you work. Adjust it from the "
+    "camera menu; Reset Transparency to 0% turns it off. Check Apply Transparency to Saved Video to "
+    "use the same transparency in your recordings, or leave it unchecked to keep the recorded camera "
+    "opaque. Both choices are remembered.";
 
 static struct {
     GtkApplication *gapp;
@@ -124,6 +129,8 @@ const char *app_area_name(void) {
 }
 
 static void update_ui(void);
+static gboolean layer_tick(gpointer data);
+static guint LayerTimer;
 
 static void refresh_area_overlay(void) {
     GdkMonitor *m = App.area.mode == AREA_REGION ? monitor_by_name(App.area.monitor) : NULL;
@@ -317,6 +324,7 @@ static void update_ui(void) {
     char *tip = g_strdup_printf("YouCam — %s", PHASE_BUSY(phase) ? recording_status() : camera_menu_title());
     status_icon_update(icon, tip);
     g_free(tip);
+    if (phase == PHASE_RECORDING && !LayerTimer) LayerTimer = g_timeout_add(LAYER_TICK_MS, layer_tick, NULL);
     if (App.quitting && phase == PHASE_IDLE) app_quit();
 }
 
@@ -423,6 +431,106 @@ static void select_size(const char *width) { app_resize(g_ascii_strtod(width, NU
 static void increase_size(void) { app_resize(window_frame().w * SIZE_STEP); }
 static void decrease_size(void) { app_resize(window_frame().w / SIZE_STEP); }
 
+/* ------------------------------------------------------------ transparency */
+
+static guint8 *LayerPixels;
+static size_t LayerSize;
+
+/* While recording, keep the opaque camera copy in the movie in step with
+ * the window: position, size, shape, mirroring and the latest frame. */
+static gboolean layer_tick(gpointer data) {
+    (void)data;
+    rect monitor, region;
+    writer *w = recording_layer_target(&monitor, &region);
+    if (!w) {
+        LayerTimer = 0;
+        return G_SOURCE_REMOVE;
+    }
+    int out_w, out_h, x, y, cw, ch;
+    const camera_frame *f = camera_current_frame();
+    int needed = f && camera_layer_needed(Prefs.transparency, Prefs.record_transparency,
+                                          App.visible, camera_state() == CAMERA_RUNNING);
+    if (!needed || !writer_output_size(w, &out_w, &out_h)) {
+        writer_push_camera(w, NULL, 0, 0, 0, 0, 0, 0);
+        return G_SOURCE_CONTINUE;
+    }
+    camera_layer l = camera_layer_map(window_frame(), monitor, region, out_w, out_h, Prefs.shape);
+    if (!camera_layer_clip(l, out_w, out_h, &x, &y, &cw, &ch)) {
+        writer_push_camera(w, NULL, 0, 0, 0, 0, 0, 0);   /* Outside the recorded area. */
+        return G_SOURCE_CONTINUE;
+    }
+    int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, cw);
+    size_t size = (size_t)stride * ch;
+    if (size > LayerSize) {
+        LayerPixels = g_realloc(LayerPixels, size);
+        LayerSize = size;
+    }
+    cairo_surface_t *s = cairo_image_surface_create_for_data(LayerPixels, CAIRO_FORMAT_ARGB32, cw, ch, stride);
+    cairo_t *cr = cairo_create(s);
+    camera_layer_draw(cr, l, x, y, f, Prefs.mirrored, FULL_VIEW);
+    cairo_destroy(cr);
+    cairo_surface_flush(s);
+    cairo_surface_destroy(s);
+    writer_push_camera(w, LayerPixels, cw, ch, stride, x, y, 1);
+    return G_SOURCE_CONTINUE;
+}
+
+static void set_transparency(double value) {
+    Prefs.transparency = transparency_normalize(value);
+    prefs_save();
+    gtk_widget_set_opacity(App.cam, 1 - Prefs.transparency);
+}
+
+static void reset_transparency(void) { set_transparency(0); }
+
+static void transparency_slider(GtkRange *r, gpointer label) {
+    char text[16];
+    snprintf(text, sizeof(text), "%.0f%%", gtk_range_get_value(r));
+    gtk_label_set_text(GTK_LABEL(label), text);
+    set_transparency(gtk_range_get_value(r) / 100);
+}
+
+/* The toggle must not close the menu: flip it by hand on release. */
+static gboolean toggle_record_transparency(GtkWidget *item, GdkEventButton *ev, gpointer d) {
+    (void)ev; (void)d;
+    GtkCheckMenuItem *check = GTK_CHECK_MENU_ITEM(item);
+    gtk_check_menu_item_set_active(check, !gtk_check_menu_item_get_active(check));
+    Prefs.record_transparency = gtk_check_menu_item_get_active(check);
+    prefs_save();
+    return TRUE;
+}
+
+static void build_transparency_menu(GtkWidget *menu) {
+    GtkWidget *fixed = gtk_fixed_new();
+    gtk_widget_set_size_request(fixed, 300, 64);
+    GtkWidget *caption = gtk_label_new("Transparency");
+    gtk_label_set_xalign(GTK_LABEL(caption), 0);
+    gtk_widget_set_size_request(caption, 205, 16);
+    gtk_fixed_put(GTK_FIXED(fixed), caption, 14, 9);
+    char text[16];
+    snprintf(text, sizeof(text), "%.0f%%", Prefs.transparency * 100);
+    GtkWidget *value = gtk_label_new(text);
+    gtk_label_set_xalign(GTK_LABEL(value), 1);
+    gtk_widget_set_size_request(value, 60, 16);
+    gtk_fixed_put(GTK_FIXED(fixed), value, 226, 9);
+    GtkWidget *slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, TRANSPARENCY_MAX * 100, 1);
+    gtk_scale_set_draw_value(GTK_SCALE(slider), FALSE);
+    gtk_range_set_value(GTK_RANGE(slider), Prefs.transparency * 100);
+    gtk_widget_set_size_request(slider, 276, 26);
+    atk_object_set_name(gtk_widget_get_accessible(slider), "Camera transparency in percent");
+    g_signal_connect(slider, "value-changed", G_CALLBACK(transparency_slider), value);
+    gtk_fixed_put(GTK_FIXED(fixed), slider, 12, 33);
+    GtkWidget *holder = gtk_menu_item_new();
+    gtk_container_add(GTK_CONTAINER(holder), fixed);
+    g_signal_connect(holder, "button-press-event", G_CALLBACK(gtk_true), NULL);
+    g_signal_connect(holder, "button-release-event", G_CALLBACK(gtk_true), NULL);
+    gtk_menu_shell_append(GTK_MENU_SHELL(menu), holder);
+    add_separator(menu);
+    GtkWidget *save = add_check(menu, "Apply Transparency to Saved Video", Prefs.record_transparency, 0, 1);
+    g_signal_connect(save, "button-release-event", G_CALLBACK(toggle_record_transparency), NULL);
+    add_item(menu, "Reset Transparency to 0%", reset_transparency, 1);
+}
+
 static void toggle_mirror(void) {
     Prefs.mirrored = !Prefs.mirrored;
     prefs_save();
@@ -522,6 +630,7 @@ GtkWidget *app_build_menu(void) {
     add_separator(sizes);
     add_item(sizes, "Increase Size", increase_size, 1);
     add_item(sizes, "Decrease Size", decrease_size, 1);
+    build_transparency_menu(add_submenu(menu, "Transparency", 1));
     GtkWidget *mirror = add_check(menu, "Mirror Camera", Prefs.mirrored, 0, 1);
     g_signal_connect_swapped(mirror, "activate", G_CALLBACK(toggle_mirror), NULL);
     add_item(menu, "Move to Bottom Right", reset_position, 1);
@@ -620,6 +729,7 @@ void app_startup(GtkApplication *gapp, int smoke) {
     recording_init(update_ui, recording_error);
     App.cam = overlay_create();
     set_camera_frame(restored_frame());
+    gtk_widget_set_opacity(App.cam, 1 - Prefs.transparency);
     App.panel = panel_create();
     area_overlay_set_on_change(area_dragged);
     if (!smoke) hotkeys_init(app_toggle_recording, app_toggle_pause);

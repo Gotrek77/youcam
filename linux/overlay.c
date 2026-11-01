@@ -127,19 +127,7 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     }
     const camera_frame *f = camera_current_frame();
     if (!f) return TRUE;
-    cairo_surface_t *image = cairo_image_surface_create_for_data(
-        f->data, CAIRO_FORMAT_RGB24, f->width, f->height, f->stride);
-    double scale = fmax(w / f->width, h / f->height);   /* Aspect fill. */
-    if (Prefs.mirrored) {
-        cairo_translate(cr, w, 0);
-        cairo_scale(cr, -1, 1);
-    }
-    cairo_translate(cr, (w - f->width * scale) / 2, (h - f->height * scale) / 2);
-    cairo_scale(cr, scale, scale);
-    cairo_set_source_surface(cr, image, 0, 0);
-    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
-    cairo_paint(cr);
-    cairo_surface_destroy(image);
+    camera_paint_frame(cr, f, w, h, Prefs.mirrored, FULL_VIEW);
     return TRUE;
 }
 

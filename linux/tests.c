@@ -172,6 +172,8 @@ static void test_prefs(void) {
     Prefs.has_origin = 1; Prefs.origin_x = 12; Prefs.origin_y = 34;
     Prefs.area = (recording_area){AREA_REGION, "HDMI-1", {10, 20, 300, 200}};
     prefs_set_string(&Prefs.restore_token, "token");
+    Prefs.transparency = 0.55;
+    Prefs.record_transparency = 1;
     prefs_save();
     memset(&Prefs, 0, sizeof(Prefs));
     prefs_load();
@@ -180,14 +182,71 @@ static void test_prefs(void) {
     EXPECT(Prefs.area.mode == AREA_REGION && strcmp(Prefs.area.monitor, "HDMI-1") == 0 &&
            rect_equal(Prefs.area.local, (rect){10, 20, 300, 200}), "The recording area survives a reload");
     EXPECT(strcmp(Prefs.restore_token, "token") == 0, "The shared monitor is remembered");
+    EXPECT(Prefs.transparency == 0.55 && Prefs.record_transparency, "Both transparency choices are remembered");
     recording_area missing = prefs_area_validate(Prefs.area, NULL);
     EXPECT(missing.mode == AREA_WHOLE_SCREEN, "An area on a disconnected display falls back to the whole screen");
-    g_file_set_contents(path, "[youcam]\nwidth=banana\n", -1, NULL);
+    g_file_set_contents(path, "[youcam]\nwidth=banana\ncameraPreviewTransparency=5\n", -1, NULL);
     prefs_load();
     EXPECT(Prefs.width == OVERLAY_DEFAULT_WIDTH, "Corrupt values fall back to defaults");
+    EXPECT(Prefs.transparency == TRANSPARENCY_MAX && !Prefs.record_transparency,
+           "Saved transparency is normalized; the saved-video option is off by default");
     g_unlink(path);
     g_rmdir(dir);
     g_free(path); g_free(dir);
+}
+
+/* CameraTransparencyTests.swift: preferences and the opaque camera copy. */
+static void test_transparency(void) {
+    double inputs[][2] = {{-1, 0}, {2, 0.8}, {NAN, 0}, {INFINITY, 0}, {0.55, 0.55}};
+    for (int i = 0; i < 5; i++)
+        EXPECT(transparency_normalize(inputs[i][0]) == inputs[i][1], "Invalid values cannot make the preview invisible");
+    EXPECT(!camera_layer_needed(0, 0, 1, 1), "An opaque preview is recorded as captured");
+    EXPECT(camera_layer_needed(0.55, 0, 1, 1), "Saved video stays opaque by default even with a translucent preview");
+    EXPECT(!camera_layer_needed(0.55, 1, 1, 1), "Applying transparency to the video records the capture as is");
+    EXPECT(!camera_layer_needed(0.55, 0, 0, 1) && !camera_layer_needed(0.55, 0, 1, 0),
+           "A hidden or stopped camera adds nothing to the movie");
+
+    /* Mapping: negative display origin, region offset, 2x pixels. */
+    rect monitor = {-1920, -300, 1920, 1080};
+    camera_layer l = camera_layer_map((rect){-1800, 0, 200, 200}, monitor, (rect){100, 200, 640, 360},
+                                      1280, 720, SHAPE_CIRCLE);
+    EXPECT(rect_equal(l.frame, (rect){40, 200, 400, 400}) && l.radius == 200,
+           "Camera mapping handles negative display coordinates, region offsets and HiDPI scale");
+    int x, y, w, h;
+    camera_layer edge = camera_layer_map((rect){-60, -60, 120, 120}, (rect){0, 0, 320, 180},
+                                         (rect){0, 0, 320, 180}, 320, 180, SHAPE_CIRCLE);
+    EXPECT(camera_layer_clip(edge, 320, 180, &x, &y, &w, &h) && x == 0 && y == 0 && w == 61 && h == 61,
+           "A camera crossing the recording boundary is clipped to the output");
+    camera_layer away = camera_layer_map((rect){500, 500, 120, 120}, (rect){0, 0, 320, 180},
+                                         (rect){0, 0, 320, 180}, 320, 180, SHAPE_CIRCLE);
+    EXPECT(!camera_layer_clip(away, 320, 180, &x, &y, &w, &h), "A camera outside the area is not drawn");
+
+    /* Render: left half red, right half blue camera. */
+    camera_frame f = {320, 180, 320 * 4, g_malloc0(320 * 180 * 4)};
+    for (int py = 0; py < 180; py++)
+        for (int px = 0; px < 320; px++) f.data[py * f.stride + px * 4 + (px < 160 ? 2 : 0)] = 255;
+    rect screen = {0, 0, 320, 180};
+    for (int s = 0; s < SHAPE_COUNT; s++) {
+        double height = 120 / shape_aspect(s);
+        for (int mirrored = 0; mirrored < 2; mirrored++) {
+            camera_layer cl = camera_layer_map((rect){100, 30, 120, height}, screen, screen, 320, 180, s);
+            EXPECT(camera_layer_clip(cl, 320, 180, &x, &y, &w, &h), "The layer is inside the movie");
+            cairo_surface_t *img = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+            cairo_t *cr = cairo_create(img);
+            camera_layer_draw(cr, cl, x, y, &f, mirrored, FULL_VIEW);
+            cairo_destroy(cr);
+            cairo_surface_flush(img);
+            guint8 *p = cairo_image_surface_get_data(img);
+            int stride = cairo_image_surface_get_stride(img), mid = (int)(30 + height / 2) - y;
+            guint8 *left = p + mid * stride + (140 - x) * 4, *right = p + mid * stride + (180 - x) * 4;
+            EXPECT(left[mirrored ? 0 : 2] > 250 && left[1] < 5 && left[3] == 255,
+                   "Camera pixels remain fully opaque with correct mirroring");
+            EXPECT(right[mirrored ? 2 : 0] > 250 && right[1] < 5, "The camera is cropped and mirrored like the preview");
+            EXPECT(p[(30 - y) * stride + (100 - x) * 4 + 3] == 0, "Clipped corners reveal the recorded desktop");
+            cairo_surface_destroy(img);
+        }
+    }
+    g_free(f.data);
 }
 
 int main(void) {
@@ -198,6 +257,7 @@ int main(void) {
     test_crop();
     test_panel_buttons();
     test_prefs();
+    test_transparency();
     printf("Passed %d logic checks.\n", Checks);
     return 0;
 }

@@ -33,6 +33,12 @@ need. `make uninstall` removes everything `make install` added.
   `~/Desktop/YouCam-Recording-<date>-<time>.mov`.
 - **Audio Input** selects a microphone and provides a gain slider and live
   level meter. System/app audio is not recorded.
+- **Transparency** optionally makes the camera see-through so you can see
+  what it covers. Adjust the slider from 0% to 80%, or choose **Reset
+  Transparency to 0%** to turn it off. Check **Apply Transparency to Saved
+  Video** to record the same transparency; leave it unchecked to keep the
+  recorded camera opaque. Both choices are remembered, and changes apply
+  immediately, including during recording.
 - **Show Recording Panel** opens optional controls. **Hide Camera** lets you
   record just the screen; launch YouCam again to bring the camera back.
 

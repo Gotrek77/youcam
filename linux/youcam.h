@@ -17,6 +17,12 @@
 
 typedef struct { double x, y, w, h; } rect;
 
+/* A decoded camera frame: BGRx, 4 bytes per pixel. */
+typedef struct {
+    int width, height, stride;
+    guint8 *data;
+} camera_frame;
+
 typedef enum { SHAPE_CIRCLE, SHAPE_SQUARE, SHAPE_RECTANGLE, SHAPE_COUNT } camera_shape;
 
 typedef enum {
@@ -94,6 +100,8 @@ typedef struct {
     double gain_db;
     recording_area area;
     char *restore_token;   /* ScreenCast portal: remembers the shared monitor. */
+    double transparency;   /* Camera preview transparency, 0...0.8. */
+    int record_transparency; /* Apply it to the saved video too. */
 } prefs;
 
 extern prefs Prefs;
@@ -114,11 +122,6 @@ rect monitor_workarea(GdkMonitor *m);
 typedef enum {
     CAMERA_IDLE, CAMERA_STARTING, CAMERA_RUNNING, CAMERA_NONE, CAMERA_FAILED
 } camera_state_kind;
-
-typedef struct {
-    int width, height, stride;
-    guint8 *data;
-} camera_frame;
 
 void camera_init(void (*on_change)(void), void (*on_frame)(void));
 void camera_show(void);
@@ -153,6 +156,27 @@ void audio_post_level(audio_level level);
 void audio_shutdown(void);
 void audio_install_gain_probe(GstElement *element);
 
+/* ------------------------------------------------------ camera_layer.c --- */
+
+#define TRANSPARENCY_MAX 0.8
+
+typedef struct {
+    rect frame;          /* Output pixels, top-left origin. */
+    double radius;
+    camera_shape shape;
+} camera_layer;
+
+#define FULL_VIEW ((rect){0, 0, 1, 1})
+
+double transparency_normalize(double value);
+int camera_layer_needed(double transparency, int apply_to_video, int visible, int running);
+camera_layer camera_layer_map(rect window, rect monitor, rect region, int out_w, int out_h,
+                              camera_shape shape);
+int camera_layer_clip(camera_layer l, int out_w, int out_h, int *x, int *y, int *w, int *h);
+void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera_frame *f,
+                       int mirrored, rect view);
+void camera_paint_frame(cairo_t *cr, const camera_frame *f, double w, double h, int mirrored, rect view);
+
 /* ------------------------------------------------------------ writer.c --- */
 
 typedef struct writer writer;
@@ -164,7 +188,10 @@ typedef struct {
 } writer_callbacks;
 
 writer *writer_start(const char *path, const char *video_source, GstElement *mic,
-                     const rect *crop_fraction, writer_callbacks cb, GError **err);
+                     const rect *crop_fraction, int camera_layer, writer_callbacks cb, GError **err);
+int writer_output_size(writer *w, int *width, int *height);
+void writer_push_camera(writer *w, const guint8 *bgra, int width, int height, int stride,
+                        int x, int y, int visible);
 void writer_pause(writer *w);
 void writer_resume(writer *w);
 double writer_elapsed(writer *w);
@@ -203,6 +230,7 @@ void recording_start(GdkMonitor *monitor, const rect *local);
 void recording_toggle_pause(void);
 void recording_stop(void);
 void recording_fail(const char *message);
+writer *recording_layer_target(rect *monitor, rect *region);
 
 /* ----------------------------------------------------------- overlay.c --- */
 
