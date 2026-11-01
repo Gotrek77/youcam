@@ -182,6 +182,7 @@ static void test_prefs(void) {
            "Defaults: circle, mirrored, 280 points");
     EXPECT(Prefs.center_stage, "Center Stage is enabled by default");
     EXPECT(Prefs.auto_mic_level, "The automatic microphone level is on by default");
+    EXPECT(Prefs.background_mode == BG_OFF, "Background removal is off by default");
     Prefs.shape = SHAPE_RECTANGLE;
     Prefs.gain_db = -6;
     Prefs.has_origin = 1; Prefs.origin_x = 12; Prefs.origin_y = 34;
@@ -190,6 +191,8 @@ static void test_prefs(void) {
     Prefs.transparency = 0.55;
     Prefs.record_transparency = 1;
     Prefs.center_stage = 0;
+    Prefs.background_mode = BG_BLUR;
+    prefs_set_string(&Prefs.background_color, "#102030");
     prefs_save();
     memset(&Prefs, 0, sizeof(Prefs));
     prefs_load();
@@ -200,6 +203,8 @@ static void test_prefs(void) {
     EXPECT(strcmp(Prefs.restore_token, "token") == 0, "The shared monitor is remembered");
     EXPECT(Prefs.transparency == 0.55 && Prefs.record_transparency, "Both transparency choices are remembered");
     EXPECT(!Prefs.center_stage, "Turning Center Stage off is remembered");
+    EXPECT(Prefs.background_mode == BG_BLUR && strcmp(Prefs.background_color, "#102030") == 0,
+           "The background choice is remembered");
     recording_area missing = prefs_area_validate(Prefs.area, NULL);
     EXPECT(missing.mode == AREA_WHOLE_SCREEN, "An area on a disconnected display falls back to the whole screen");
     g_file_set_contents(path, "[youcam]\nwidth=banana\ncameraPreviewTransparency=5\n", -1, NULL);
@@ -398,6 +403,56 @@ static void test_mic_agc(void) {
            "wpctl volumes are parsed, errors rejected");
 }
 
+/* Background removal: mode names, colors and the pure image helpers. */
+static void test_background(void) {
+    EXPECT(background_mode_parse("blur") == BG_BLUR && background_mode_parse("transparent") == BG_TRANSPARENT,
+           "Background modes are read by name");
+    EXPECT(background_mode_parse("banana") == BG_OFF && background_mode_parse(NULL) == BG_OFF,
+           "An unknown background mode is Off");
+    double rgb[3];
+    EXPECT(background_color_parse("#ff8000", rgb) && rgb[0] == 1 && near(rgb[1], 128 / 255.0) && rgb[2] == 0,
+           "Colors are #rrggbb");
+    EXPECT(!background_color_parse("red", rgb) && !background_color_parse("#12345", rgb) &&
+           !background_color_parse(NULL, rgb), "Invalid colors are rejected");
+
+    guint8 bgrx[4 * 2 * 4];   /* 4x2: left half red, right half blue. */
+    for (int i = 0; i < 8; i++) {
+        guint8 *p = bgrx + i * 4;
+        int left = i % 4 < 2;
+        p[0] = left ? 0 : 255; p[1] = 0; p[2] = left ? 255 : 0; p[3] = 255;
+    }
+    guint8 rgb2[6];
+    frame_to_model(bgrx, 4, 2, 16, rgb2, 2, 1);
+    EXPECT(rgb2[0] == 255 && rgb2[2] == 0 && rgb2[3] == 0 && rgb2[5] == 255,
+           "Frames shrink to packed RGB by averaging");
+
+    float raw[2] = {1, 0};
+    guint8 mask[2];
+    mask_smooth(mask, raw, 2, 0);
+    EXPECT(mask[0] == 255 && mask[1] == 0, "The first mask is taken as is");
+    float flipped[2] = {0, 1};
+    mask_smooth(mask, flipped, 2, 1);
+    EXPECT(mask[0] > 0 && mask[0] < 255 && mask[1] > 0 && mask[1] < 255, "Later masks are smoothed over time");
+
+    guint8 white[4 * 4];
+    memset(white, 255, sizeof(white));
+    camera_frame f = {4, 1, 16, white}, person = {0, 0, 0, NULL};
+    guint8 half[2] = {255, 0};
+    mask_compose(&f, half, 2, 1, &person);
+    EXPECT(person.width == 4 && person.data[3] == 255 && person.data[15] == 0, "The mask becomes alpha");
+    EXPECT(person.data[7] == 191 && person.data[11] == 64 && person.data[4] == 191,
+           "Alpha is interpolated and colors premultiplied");
+    g_free(person.data);
+
+    guint8 gray[64 * 32 * 4];
+    memset(gray, 128, sizeof(gray));
+    camera_frame g = {64, 32, 256, gray}, blurred = {0, 0, 0, NULL};
+    blur_small(&g, &blurred);
+    EXPECT(blurred.width == 4 && blurred.height == 2 && blurred.data[0] == 128 && blurred.data[5] == 128,
+           "A uniform frame stays uniform when blurred");
+    g_free(blurred.data);
+}
+
 int main(void) {
     test_overlay_geometry();
     test_area_corners();
@@ -408,6 +463,7 @@ int main(void) {
     test_prefs();
     test_transparency();
     test_center_stage();
+    test_background();
     test_mutter_monitor_rect();
     test_mic_agc();
     printf("Passed %d logic checks.\n", Checks);

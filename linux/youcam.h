@@ -98,6 +98,9 @@ typedef struct {
     rect local;
 } recording_area;
 
+/* What replaces the background behind the person (background.c). */
+typedef enum { BG_OFF, BG_TRANSPARENT, BG_BLUR, BG_IMAGE, BG_COLOR, BG_COUNT } background_mode;
+
 typedef struct {
     camera_shape shape;
     int mirrored;
@@ -116,6 +119,9 @@ typedef struct {
     char *container;       /* Linux only: file extension of Containers[], NULL = mov. */
     int auto_mic_level;    /* Linux only: adjust the system microphone level while in use. */
     char *mic_restore;     /* Linux only: "node:volume" to put back (survives a crash). */
+    background_mode background_mode;   /* Linux only. */
+    char *background_image;            /* Linux only: picture for BG_IMAGE. */
+    char *background_color;            /* Linux only: "#rrggbb" for BG_COLOR. */
 } prefs;
 
 extern prefs Prefs;
@@ -384,5 +390,16 @@ void app_show_message(const char *title, const char *text, GtkMessageType type);
 
 typedef enum { SEG_LANDSCAPE, SEG_SQUARE, SEG_VARIANTS } seg_variant;
 const guint8 *background_model_bytes(seg_variant v, size_t *size);
+
+extern const char *const BackgroundNames[BG_COUNT];    /* Prefs values: "off", "transparent", ... */
+extern const char *const BackgroundTitles[BG_COUNT];   /* Menu labels: "Off", "Transparent", ... */
+#define BACKGROUND_DEFAULT_COLOR "#333333"
+
+background_mode background_mode_parse(const char *name);              /* Unknown or NULL -> BG_OFF. */
+int background_color_parse(const char *text, double rgb[3]);          /* "#rrggbb"; 0 if invalid. */
+void frame_to_model(const guint8 *bgrx, int w, int h, int stride, guint8 *rgb, int mw, int mh);
+void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous);
+void mask_compose(const camera_frame *f, const guint8 *mask, int mw, int mh, camera_frame *out);
+void blur_small(const camera_frame *f, camera_frame *out);
 
 #endif

@@ -63,6 +63,11 @@ void prefs_load(void) {
     Prefs.container = g_key_file_get_string(kf, "youcam", "container", NULL);
     Prefs.auto_mic_level = (int)key_double(kf, "youcam", "autoMicLevel", 1, NULL);
     Prefs.mic_restore = g_key_file_get_string(kf, "youcam", "micVolumeRestore", NULL);
+    char *background = g_key_file_get_string(kf, "youcam", "backgroundMode", NULL);
+    Prefs.background_mode = background_mode_parse(background);
+    g_free(background);
+    Prefs.background_image = g_key_file_get_string(kf, "youcam", "backgroundImage", NULL);
+    Prefs.background_color = g_key_file_get_string(kf, "youcam", "backgroundColor", NULL);
     Prefs.noise_reduction = noise_reduction_clamp((int)key_double(kf, "youcam", "noiseReduction",
                                                                  NOISE_REDUCTION_DEFAULT, NULL));
 
@@ -103,6 +108,9 @@ void prefs_save(void) {
     g_key_file_set_double(kf, "youcam", "centerStage", Prefs.center_stage);
     g_key_file_set_double(kf, "youcam", "autoMicLevel", Prefs.auto_mic_level);
     set_string(kf, "youcam", "micVolumeRestore", Prefs.mic_restore);
+    g_key_file_set_string(kf, "youcam", "backgroundMode", BackgroundNames[Prefs.background_mode]);
+    set_string(kf, "youcam", "backgroundImage", Prefs.background_image);
+    set_string(kf, "youcam", "backgroundColor", Prefs.background_color);
     g_key_file_set_string(kf, "area", "mode", AreaModes[Prefs.area.mode]);
     if (Prefs.area.mode != AREA_WHOLE_SCREEN) {
         g_key_file_set_string(kf, "area", "monitor", Prefs.area.monitor);
