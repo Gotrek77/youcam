@@ -134,6 +134,91 @@ static void test_loader(void) {
     }
 }
 
+/* Golden test: the masks below were produced by MediaPipe on the committed
+ * fixtures.  They are 8-bit, so they carry a quantization error of half a
+ * step that the difference threshold has to allow for. */
+#define GOLDEN_MAX_DIFF 0.02
+#define GOLDEN_MIN_IOU 0.98
+#define MASK_QUANTUM (0.5 / 255)
+
+static const char *const Fixtures[] = {"ride", "armstrong"};
+static const char *const VariantNames[SEG_VARIANTS] = {"landscape", "square"};
+
+/* Packed RGB of a PNG, or NULL. */
+static guint8 *load_rgb(const char *path, int *w, int *h) {
+    GdkPixbuf *p = gdk_pixbuf_new_from_file(path, NULL);
+    if (!p) return NULL;
+    *w = gdk_pixbuf_get_width(p);
+    *h = gdk_pixbuf_get_height(p);
+    int n = gdk_pixbuf_get_n_channels(p), stride = gdk_pixbuf_get_rowstride(p);
+    const guint8 *px = gdk_pixbuf_read_pixels(p);
+    guint8 *rgb = g_malloc((size_t)*w * *h * 3);
+    for (int y = 0; y < *h; y++)
+        for (int x = 0; x < *w; x++)
+            memcpy(rgb + ((size_t)y * *w + x) * 3, px + (size_t)y * stride + x * n, 3);
+    g_object_unref(p);
+    return rgb;
+}
+
+static segment_model *load_variant(seg_variant v) {
+    size_t size;
+    const guint8 *data = background_model_bytes(v, &size);
+    return segment_load(data, size, NULL);
+}
+
+static void test_golden(void) {
+    for (int v = 0; v < SEG_VARIANTS; v++) {
+        segment_model *m = load_variant(v);
+        int mw, mh;
+        segment_input_size(m, &mw, &mh);
+        for (size_t f = 0; f < G_N_ELEMENTS(Fixtures); f++) {
+            char *image = g_strdup_printf("testdata/selfie/%s-%s.png", Fixtures[f], VariantNames[v]);
+            char *golden = g_strdup_printf("testdata/selfie/%s-%s-mask.png", Fixtures[f], VariantNames[v]);
+            int w = 0, h = 0, gw = 0, gh = 0;
+            guint8 *rgb = load_rgb(image, &w, &h), *expected = load_rgb(golden, &gw, &gh);
+            int fits = rgb && expected && w == mw && h == mh && gw == mw && gh == mh;
+            EXPECT(fits, "Fixtures match the model size");
+            if (fits) {
+                float *mask = g_new(float, (size_t)w * h);
+                segment_run(m, rgb, mask);
+                double worst = 0;
+                int both = 0, either = 0;
+                for (int i = 0; i < w * h; i++) {
+                    double g = expected[i * 3] / 255.0;
+                    worst = fmax(worst, fabs(mask[i] - g));
+                    both += mask[i] >= 0.5 && g >= 0.5;
+                    either += mask[i] >= 0.5 || g >= 0.5;
+                }
+                double iou = either ? (double)both / either : 1;
+                printf("  %s %s: max diff %.4f, IoU %.4f\n", Fixtures[f], VariantNames[v], worst, iou);
+                EXPECT(worst < GOLDEN_MAX_DIFF + MASK_QUANTUM && iou > GOLDEN_MIN_IOU,
+                       "The C model matches MediaPipe's mask");
+                g_free(mask);
+            }
+            g_free(rgb); g_free(expected); g_free(image); g_free(golden);
+        }
+        segment_free(m);
+    }
+}
+
+static void test_edge_cases(void) {
+    segment_model *m = load_variant(SEG_LANDSCAPE);
+    int w, h;
+    segment_input_size(m, &w, &h);
+    guint8 *black = g_new0(guint8, (size_t)w * h * 3);
+    float *mask = g_new(float, (size_t)w * h);
+    segment_run(m, black, mask);
+    int sane = 1, people = 0;
+    for (int i = 0; i < w * h; i++) {
+        sane &= isfinite(mask[i]) && mask[i] >= 0 && mask[i] <= 1;
+        people += mask[i] >= 0.5;
+    }
+    EXPECT(sane, "A black frame gives a valid mask");
+    EXPECT(people < w * h / 20, "A black frame has (almost) no person");
+    g_free(black); g_free(mask);
+    segment_free(m);
+}
+
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
     test_conv();
@@ -141,6 +226,8 @@ int main(int argc, char **argv) {
     test_tconv();
     test_small_ops();
     test_loader();
+    test_golden();
+    test_edge_cases();
     printf("Passed %d segmentation checks.\n", Checks);
     return 0;
 }
