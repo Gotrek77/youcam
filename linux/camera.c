@@ -91,6 +91,7 @@ static GstFlowReturn new_sample(GstElement *sink, gpointer data) {
         C.draw_pending = 1;
         g_mutex_unlock(&C.lock);
         if (map.size >= size) center_stage_feed(map.data, w, h, w * 4);   /* Off the main thread. */
+        if (map.size >= size) background_feed(map.data, w, h, w * 4);
         gst_buffer_unmap(buf, &map);
         if (schedule) g_idle_add(deliver_frame, NULL);
     }

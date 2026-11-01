@@ -494,7 +494,7 @@ static gboolean layer_tick(gpointer data) {
     cairo_surface_t *s = cairo_image_surface_create_for_data(LayerPixels, CAIRO_FORMAT_ARGB32, cw, ch, stride);
     cairo_t *cr = cairo_create(s);
     camera_layer_draw(cr, l, x, y, f, Prefs.mirrored,
-                      center_stage_now(l.frame.w, l.frame.h, Prefs.shape, Prefs.mirrored), NULL);
+                      center_stage_now(l.frame.w, l.frame.h, Prefs.shape, Prefs.mirrored), background_now(f));
     cairo_destroy(cr);
     cairo_surface_flush(s);
     cairo_surface_destroy(s);
@@ -790,6 +790,7 @@ void app_startup(GtkApplication *gapp, int smoke) {
 
     camera_init(camera_changed, overlay_queue_draw);
     center_stage_init(overlay_animate);
+    background_apply_prefs();
     audio_init(audio_changed, microphone_lost);
     recording_init(update_ui, recording_error);
     App.cam = overlay_create();

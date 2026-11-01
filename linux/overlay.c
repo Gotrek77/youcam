@@ -130,19 +130,23 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     cairo_set_source_rgba(cr, 0, 0, 0, 0);
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-    shape_path(cr, w, h);
-    cairo_clip(cr);
-    cairo_set_source_rgb(cr, 0.09, 0.09, 0.09);
-    cairo_paint(cr);
 
     const char *title, *detail;
-    if (camera_message(&title, &detail)) {
+    int message = camera_message(&title, &detail);
+    const camera_frame *f = message ? NULL : camera_current_frame();
+    const background_layer *bg = f ? background_now(f) : NULL;
+    if (!bg || bg->mode != BG_TRANSPARENT) {   /* Transparent: the person is the shape. */
+        shape_path(cr, w, h);
+        cairo_clip(cr);
+        cairo_set_source_rgb(cr, 0.09, 0.09, 0.09);
+        cairo_paint(cr);
+    }
+    if (message) {
         draw_placeholder(cr, w, h, title, detail);
         return TRUE;
     }
-    const camera_frame *f = camera_current_frame();
     if (!f) return TRUE;
-    camera_paint_frame(cr, f, w, h, Prefs.mirrored, center_stage_now(w, h, Prefs.shape, Prefs.mirrored), NULL);
+    camera_paint_frame(cr, f, w, h, Prefs.mirrored, center_stage_now(w, h, Prefs.shape, Prefs.mirrored), bg);
     return TRUE;
 }
 

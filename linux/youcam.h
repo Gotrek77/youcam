@@ -202,6 +202,11 @@ typedef struct {
     double rgb[3];            /* BG_COLOR. */
 } background_layer;
 
+int background_available(void);                      /* Both models load (checked once). */
+void background_apply_prefs(void);                   /* Starts or stops the worker for Prefs.background_mode. */
+void background_feed(const guint8 *bgrx, int w, int h, int stride);   /* Camera thread. */
+const background_layer *background_now(const camera_frame *f);      /* Main thread; NULL = plain picture. */
+
 /* ------------------------------------------------------ camera_layer.c --- */
 
 #define TRANSPARENCY_MAX 0.8

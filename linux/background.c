@@ -120,3 +120,169 @@ void blur_small(const camera_frame *f, camera_frame *out) {
     box_pass(tmp, out->data, w, h, 0, 1);
     g_free(tmp);
 }
+
+/* ------------------------------------------------------------- worker --- */
+
+#define SQUARE_BELOW_ASPECT 1.5   /* Cameras narrower than this use the 256x256 model. */
+#define SEG_MAX_INPUT (256 * 256 * 3)
+
+typedef struct { guint8 *mask; int w, h; } published_mask;
+
+static struct {
+    GMutex lock;
+    GCond wake;
+    GThread *thread;
+    int quit, pending;            /* pending: input holds a frame the worker is running. */
+    seg_variant variant;
+    guint8 input[SEG_MAX_INPUT];
+    int available;                /* -1 not checked yet. */
+    int model_w[SEG_VARIANTS], model_h[SEG_VARIANTS];
+    /* Main thread only. */
+    guint8 *mask;
+    int mask_w, mask_h;
+    background_layer layer;
+    char *image_path;             /* The path B.layer.image was loaded from. */
+} B = {.available = -1};
+
+int background_available(void) {
+    if (B.available >= 0) return B.available;
+    B.available = 1;
+    for (int v = 0; v < SEG_VARIANTS; v++) {
+        size_t size;
+        const guint8 *data = background_model_bytes(v, &size);
+        GError *err = NULL;
+        segment_model *m = segment_load(data, size, &err);
+        if (!m) {
+            g_printerr("youcam: background removal unavailable: %s\n", err->message);
+            g_clear_error(&err);
+            B.available = 0;
+            return 0;
+        }
+        segment_input_size(m, &B.model_w[v], &B.model_h[v]);
+        if ((size_t)B.model_w[v] * B.model_h[v] * 3 > SEG_MAX_INPUT) B.available = 0;
+        segment_free(m);
+    }
+    return B.available;
+}
+
+static gboolean deliver_mask(gpointer data) {
+    published_mask *p = data;
+    if (Prefs.background_mode == BG_OFF) {
+        g_free(p->mask);
+    } else {
+        g_free(B.mask);
+        B.mask = p->mask;
+        B.mask_w = p->w;
+        B.mask_h = p->h;
+    }
+    g_free(p);
+    return G_SOURCE_REMOVE;
+}
+
+/* Runs the model on the latest frame the camera thread left in B.input. */
+static gpointer worker(gpointer unused) {
+    (void)unused;
+    segment_model *model = NULL;
+    int loaded = -1, has_previous = 0, n = 0;
+    float *raw = NULL;
+    guint8 *smoothed = NULL;
+    g_mutex_lock(&B.lock);
+    for (;;) {
+        while (!B.pending && !B.quit) g_cond_wait(&B.wake, &B.lock);
+        if (B.quit) break;
+        seg_variant v = B.variant;
+        g_mutex_unlock(&B.lock);
+        if ((int)v != loaded) {   /* First frame, or the camera changed shape. */
+            size_t size;
+            const guint8 *data = background_model_bytes(v, &size);
+            segment_free(model);
+            model = segment_load(data, size, NULL);   /* Checked by background_available(). */
+            loaded = v;
+            has_previous = 0;
+            n = B.model_w[v] * B.model_h[v];
+            raw = g_renew(float, raw, n);
+            smoothed = g_renew(guint8, smoothed, n);
+        }
+        segment_run(model, B.input, raw);
+        mask_smooth(smoothed, raw, n, has_previous);
+        has_previous = 1;
+        published_mask *p = g_new(published_mask, 1);
+        *p = (published_mask){g_memdup2(smoothed, n), B.model_w[v], B.model_h[v]};
+        g_idle_add(deliver_mask, p);
+        g_mutex_lock(&B.lock);
+        B.pending = 0;
+    }
+    g_mutex_unlock(&B.lock);
+    segment_free(model);
+    g_free(raw);
+    g_free(smoothed);
+    return NULL;
+}
+
+/* Camera thread, every frame. Never queues: while the worker is busy the
+ * frame is skipped, so a slow model lowers the mask rate, not the preview's. */
+void background_feed(const guint8 *bgrx, int w, int h, int stride) {
+    if (Prefs.background_mode == BG_OFF) return;
+    g_mutex_lock(&B.lock);
+    if (B.thread && !B.pending) {
+        seg_variant v = (double)w / h < SQUARE_BELOW_ASPECT ? SEG_SQUARE : SEG_LANDSCAPE;
+        frame_to_model(bgrx, w, h, stride, B.input, B.model_w[v], B.model_h[v]);
+        B.variant = v;
+        B.pending = 1;
+        g_cond_signal(&B.wake);
+    }
+    g_mutex_unlock(&B.lock);
+}
+
+/* B.thread changes under the lock because background_feed reads it on the
+ * camera thread. Stopping joins the worker, which frees the model. */
+void background_apply_prefs(void) {
+    int wanted = Prefs.background_mode != BG_OFF && background_available();
+    g_mutex_lock(&B.lock);
+    GThread *stopping = NULL;
+    if (wanted && !B.thread) {
+        B.quit = 0;
+        B.pending = 0;
+        B.thread = g_thread_new("youcam-segment", worker, NULL);
+    } else if (!wanted && B.thread) {
+        B.quit = 1;
+        g_cond_signal(&B.wake);
+        stopping = B.thread;
+        B.thread = NULL;
+    }
+    g_mutex_unlock(&B.lock);
+    if (stopping) {
+        g_thread_join(stopping);
+        g_clear_pointer(&B.mask, g_free);
+    }
+}
+
+/* The chosen image, loaded once per path; NULL (and one log line) if it cannot be read. */
+static GdkPixbuf *background_image(void) {
+    const char *path = Prefs.background_image;
+    if (g_strcmp0(path, B.image_path) == 0) return B.layer.image;
+    g_clear_object(&B.layer.image);
+    prefs_set_string(&B.image_path, path);
+    GError *err = NULL;
+    if (path) B.layer.image = gdk_pixbuf_new_from_file(path, &err);
+    if (!B.layer.image) {
+        g_printerr("youcam: background image unavailable, using Blur: %s\n", err ? err->message : "none chosen");
+        g_clear_error(&err);
+    }
+    return B.layer.image;
+}
+
+/* Recomposed on every call (preview and recording layer), about 2-4 ms each
+ * at 720p; worth caching per camera frame only if it ever shows up. */
+const background_layer *background_now(const camera_frame *f) {
+    background_mode mode = Prefs.background_mode;
+    if (mode == BG_OFF || !B.mask || !f) return NULL;
+    background_layer *l = &B.layer;
+    mask_compose(f, B.mask, B.mask_w, B.mask_h, &l->person);
+    l->mode = mode;
+    if (mode == BG_IMAGE && !background_image()) l->mode = BG_BLUR;
+    if (l->mode == BG_BLUR) blur_small(f, &l->blurred);
+    if (l->mode == BG_COLOR && !background_color_parse(Prefs.background_color, l->rgb))
+        background_color_parse(BACKGROUND_DEFAULT_COLOR, l->rgb);
+    return l;
+}
