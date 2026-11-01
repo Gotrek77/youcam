@@ -181,6 +181,10 @@ typedef void (*portal_error)(const char *message, void *ud);
 void portal_screencast_start(const char *restore_token, screencast_ready ready,
                              portal_error error, void *ud);
 void portal_close_session(const char *handle);
+GDBusConnection *portal_bus(void);
+typedef void (*request_done)(GVariant *results, void *ud);   /* results NULL = cancelled */
+int portal_call(const char *iface, const char *method, GVariant **prefix_args, int n_prefix,
+                GVariantBuilder *options, request_done done, void *ud, GError **err);
 
 /* ----------------------------------------------------------- hotkeys.c --- */
 
@@ -211,6 +215,7 @@ void overlay_queue_draw(void);
 GtkWidget *panel_create(void);
 void panel_update(void);
 void panel_update_audio(void);
+GtkWidget *audio_controls_new(void);
 
 /* ------------------------------------------------------------ region.c --- */
 
@@ -239,6 +244,7 @@ void capture_exclusion_update(void);
 
 void app_startup(GtkApplication *gapp, int smoke_test);
 void app_reopen(void);
+void app_snapshot(const char *dir);
 GtkWidget *app_build_menu(void);
 GtkWidget *app_build_area_menu(void);
 void app_popup_menu(GtkWidget *menu, GdkEvent *event);

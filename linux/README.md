@@ -1,30 +1,54 @@
 # YouCam for Linux
 
-Port of the macOS app: a frameless floating camera and screen recorder for GNOME (Wayland or X11).
-Python + GTK 3 + GStreamer, no pip packages.
+A C port of the macOS app: a floating camera without a window frame, with
+selectable cameras, shapes and microphone input, plus a screen recorder.
+Built on GTK 3 and GStreamer, which GNOME desktops already ship.
 
-## Requirements
+## Build and run
 
-`python-gobject`, `gtk3`, GStreamer 1.20+ with `gst-plugins-good`, `gst-plugins-ugly` (x264), `gst-libav` (AAC),
-`gst-plugin-pipewire`, and `xdg-desktop-portal-gnome`.
-
-## Run
+Requires GTK 3, GStreamer 1.20+ with the good, ugly (x264) and libav (AAC)
+plugins, the PipeWire GStreamer plugin and `xdg-desktop-portal` (GNOME,
+KDE or another desktop with a ScreenCast portal).
 
 ```sh
-make install   # ~/.local: launcher, app files, desktop entry (needed for global shortcuts)
-youcam         # or: make run
+make
+make install      # ~/.local: binary, icons, desktop entry
+youcam
 ```
+
+The desktop entry gives the portal an app id, which the global shortcuts
+need. `make uninstall` removes everything `make install` added.
+
+## Use
+
+- **Right-click the camera** (or Control-click) for controls. Drag to move
+  it; scroll to resize. Choose a circle, square, or rectangle.
+- **Recording Area → Select Area…** selects a region. Drag its corner dots to
+  adjust it before recording, or choose **Whole Screen**. With several
+  displays, **Whole Screen — <display>** records a specific one. Your area
+  choice is remembered.
+- **Start Recording**, **Pause / Resume**, and **Stop Recording** control
+  capture. The first time, the system asks which screen to share; the choice
+  is remembered. Movies save automatically to
+  `~/Desktop/YouCam-Recording-<date>-<time>.mov`.
+- **Audio Input** selects a microphone and provides a gain slider and live
+  level meter. System/app audio is not recorded.
+- **Show Recording Panel** opens optional controls. **Hide Camera** lets you
+  record just the screen; launch YouCam again to bring the camera back.
+
+Global shortcuts: **Control–Alt–Super–R** starts/stops; **Control–Alt–Super–P**
+pauses/resumes (GNOME asks to confirm them once).
+
+Run checks with `make test` and `make smoke-test`.
 
 ## Differences from macOS
 
-- The camera window runs through XWayland so it can stay on top and remember its position.
-- Screen capture goes through the desktop portal: the first recording asks which monitor to share,
-  later ones reuse it (**Recording Area → Choose Another Monitor Next Time** resets that).
-- A selected area is stored as a fraction of the monitor and cropped from the captured stream.
-- Audio Input starts on **No Audio**; pick a microphone once and it is remembered.
-- Movies are `.mp4` (H.264 + AAC) on the Desktop.
-- Global shortcuts Ctrl+Alt+Super+R / P use the GlobalShortcuts portal; GNOME asks to confirm them once.
-- Not ported: menu-bar icon (GNOME has no tray), recording panel, area corner handles, hiding guides from recordings.
-  Hide Camera hides the window; launch YouCam again to bring it back.
-
-`make uninstall` removes what `make install` added. `make test` runs the logic self-check and a synthetic recording with pause/resume.
+- Windows run through XWayland, the only way on GNOME Wayland to keep the
+  camera above other windows and remember where it was.
+- The menu bar icon is a StatusNotifierItem: GNOME shows it only with the
+  AppIndicator extension.
+- macOS excludes YouCam's panel and guides from recordings. The portal cannot
+  exclude windows: with a selected area they stay outside the crop, but a
+  whole-screen recording shows the panel if it is open.
+- Menu keyboard equivalents (Command-H, Command-1…) are not available: the
+  camera never takes keyboard focus. The global shortcuts work everywhere.
