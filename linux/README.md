@@ -2,17 +2,21 @@
 
 A C port of the macOS app: a floating camera without a window frame, with
 selectable cameras, shapes and microphone input, plus a screen recorder.
-Built on GTK 3 and GStreamer, which GNOME desktops already ship.
+Built on GTK 3 and GStreamer, which GNOME desktops already ship. See
+[CHANGELOG.md](CHANGELOG.md) for what the port adds and fixes.
 
 ## Build and run
 
 Requires GTK 3, GStreamer 1.20+ with the good, ugly (x264) and libav (AAC)
 plugins, the PipeWire GStreamer plugin and `xdg-desktop-portal` (GNOME,
-KDE or another desktop with a ScreenCast portal).
+KDE or another desktop with a ScreenCast portal). Optional: the bad plugins
+(`webrtcdsp` for Noise Reduction, `vah264enc`/`nvh264enc` for GPU encoding)
+and WirePlumber's `wpctl` for Automatic Microphone Level; without them those
+features are skipped.
 
 ```sh
 make
-make install      # ~/.local: binary, icons, desktop entry
+make install      # ~/.local: binary, icons, desktop entry, Shell extension
 youcam
 ```
 
@@ -30,7 +34,8 @@ need. `make uninstall` removes everything `make install` added.
 - **Start Recording**, **Pause / Resume**, and **Stop Recording** control
   capture. The first time, the system asks which screen to share; the choice
   is remembered. Movies save automatically to
-  `~/Desktop/YouCam-Recording-<date>-<time>.mov`.
+  `~/Desktop/YouCam-Recording-<date>-<time>.mov` (or the chosen
+  Recording Format).
 - **Audio Input** selects a microphone and provides a gain slider and live
   level meter. System/app audio is not recorded. **Noise Reduction** (Linux
   only: Off, Low, Moderate, High, Very High; default Moderate) removes hum and
@@ -62,7 +67,8 @@ Global shortcuts: **Control–Alt–Super–R** starts/stops; **Control–Alt–
 pauses/resumes (GNOME asks to confirm them once).
 
 Run checks with `make test` and `make smoke-test`. `./youcam --record-test 6` makes a real 6-second
-recording through the portal (after one recording has saved the monitor choice, no dialog appears) and
+recording through the portal or, with the capture exclusion extension active, through Mutter
+(after one portal recording has saved the monitor choice, no dialog appears) and
 quits; inspect the movie on the Desktop with `ffprobe`.
 
 Face detection uses [pico](https://github.com/nenadmarkus/pico) by Nenad
