@@ -12,9 +12,10 @@
  * of wrapping; clipping is reported both for the source and the result, so
  * the meter warns about a hot input even after the gain was lowered. */
 audio_level audio_gain_apply(float *samples, size_t count, float gain) {
-    audio_level level = {0, 0};
+    audio_level level = {0, 0, 0};
     for (size_t i = 0; i < count; i++) {
         float in = isfinite(samples[i]) ? samples[i] : 0;
+        if (fabsf(in) > level.source_peak) level.source_peak = fabsf(in);
         float out = in * gain;
         float mag = fabsf(out);
         if (mag > level.peak) level.peak = mag;

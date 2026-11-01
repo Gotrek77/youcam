@@ -35,6 +35,11 @@ need. `make uninstall` removes everything `make install` added.
   level meter. System/app audio is not recorded. **Noise Reduction** (Linux
   only: Off, Low, Moderate, High, Very High; default Moderate) removes hum and
   room noise from the recorded microphone with WebRTC noise suppression.
+  **Automatic Microphone Level** (Linux only, on by default) adjusts the
+  system level of the microphone (via `wpctl`) only while YouCam uses it:
+  lower on clipping or loud peaks, higher for quiet speech. The original level
+  is put back when YouCam stops using the microphone, quits, or restarts
+  after a crash. Other apps see the changed level meanwhile.
 - **Recording Format** (Linux only) picks the container: MOV (default, like
   macOS), MP4, MKV or AVI, all H.264 + AAC. MKV stays playable even if
   YouCam is killed mid-recording.

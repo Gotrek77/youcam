@@ -60,7 +60,7 @@ typedef enum {
 
 #define PHASE_BUSY(p) ((p) != PHASE_IDLE)
 
-typedef struct { float peak; int clipped; } audio_level;
+typedef struct { float peak; int clipped; float source_peak; } audio_level;   /* source_peak: before the gain. */
 
 #define GAIN_DB_MIN (-36.0)
 #define GAIN_DB_MAX 12.0
@@ -114,6 +114,8 @@ typedef struct {
     int center_stage;      /* Follow the face (default on). */
     int noise_reduction;   /* Linux only: 0 off, 1...4 = WebRTC suppression low...very high. */
     char *container;       /* Linux only: file extension of Containers[], NULL = mov. */
+    int auto_mic_level;    /* Linux only: adjust the system microphone level while in use. */
+    char *mic_restore;     /* Linux only: "node:volume" to put back (survives a crash). */
 } prefs;
 
 extern prefs Prefs;
@@ -166,6 +168,7 @@ GstElement *audio_create_source(void);
 void audio_monitor(const char *reason, int enabled);
 void audio_post_level(audio_level level);
 void audio_shutdown(void);
+void audio_set_auto_mic_level(int on);
 void audio_install_gain_probe(GstElement *element);
 
 /* ------------------------------------------------------ camera_layer.c --- */
@@ -301,6 +304,22 @@ void area_overlay_set_on_change(void (*cb)(GdkMonitor *m, rect local));
 
 void status_icon_init(void (*on_activate)(int x, int y));
 void status_icon_update(const char *icon_name, const char *tooltip);
+
+/* ----------------------------------------------------------- mic_level.c --- */
+
+#define MIC_AGC_CLIP_STEP_DB (-3.0)
+#define MIC_AGC_STEP_DB 1.5
+#define MIC_VOLUME_MIN 0.05
+#define MIC_VOLUME_MAX 1.0
+
+typedef struct { gint64 window_start, hold_until; float window_peak; } mic_agc;
+
+double mic_agc_step(mic_agc *a, float source_peak, gint64 now_us);
+double mic_volume_after(double volume, double db);
+double mic_volume_parse(const char *wpctl_output);
+void mic_level_use(const char *node);
+void mic_level_feed(float source_peak);
+void mic_level_recover(void);
 
 /* ---------------------------------------------------------- mutter_cast.c --- */
 

@@ -61,6 +61,8 @@ void prefs_load(void) {
     Prefs.record_transparency = g_key_file_get_boolean(kf, "youcam", "recordCameraTransparency", NULL);
     Prefs.center_stage = (int)key_double(kf, "youcam", "centerStage", 1, NULL);
     Prefs.container = g_key_file_get_string(kf, "youcam", "container", NULL);
+    Prefs.auto_mic_level = (int)key_double(kf, "youcam", "autoMicLevel", 1, NULL);
+    Prefs.mic_restore = g_key_file_get_string(kf, "youcam", "micVolumeRestore", NULL);
     Prefs.noise_reduction = noise_reduction_clamp((int)key_double(kf, "youcam", "noiseReduction",
                                                                  NOISE_REDUCTION_DEFAULT, NULL));
 
@@ -99,6 +101,8 @@ void prefs_save(void) {
     g_key_file_set_integer(kf, "youcam", "noiseReduction", Prefs.noise_reduction);
     g_key_file_set_string(kf, "youcam", "container", container_for(Prefs.container)->ext);
     g_key_file_set_double(kf, "youcam", "centerStage", Prefs.center_stage);
+    g_key_file_set_double(kf, "youcam", "autoMicLevel", Prefs.auto_mic_level);
+    set_string(kf, "youcam", "micVolumeRestore", Prefs.mic_restore);
     g_key_file_set_string(kf, "area", "mode", AreaModes[Prefs.area.mode]);
     if (Prefs.area.mode != AREA_WHOLE_SCREEN) {
         g_key_file_set_string(kf, "area", "monitor", Prefs.area.monitor);

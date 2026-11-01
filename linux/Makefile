@@ -8,7 +8,7 @@ CFLAGS ?= -O2
 CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $(PKGS))
 LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
-CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o
+CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o
 MEDIA := writer.o audio.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)

@@ -1,3 +1,4 @@
+#include <locale.h>
 /* Logic checks ported from the Swift tests in Tests/ (the parts that are not AppKit UI).
  * Coordinates are GDK's (top-left origin): the macOS cases are mirrored
  * vertically inside a 1440x900 display. */
@@ -96,6 +97,7 @@ static void test_audio_gain(void) {
     EXPECT(quiet[0] == 0 && quiet[1] == 0.05f && quiet[2] == -0.125f && quiet[3] == 0.25f,
            "The input slider changes actual recorded samples");
     EXPECT(!l.clipped && near(l.peak, 0.25), "The meter reports the gain-adjusted signal");
+    EXPECT(near(l.source_peak, 0.5), "The source peak is measured before the gain");
     float loud[] = {-0.8f, 0.8f};
     l = audio_gain_apply(loud, 2, 2);
     EXPECT(loud[0] == -1 && loud[1] == 1 && l.clipped, "Gain cannot wrap or overflow audio samples");
@@ -104,8 +106,8 @@ static void test_audio_gain(void) {
     float invalid[] = {NAN, INFINITY};
     audio_gain_apply(invalid, 2, 1);
     EXPECT(invalid[0] == 0 && invalid[1] == 0, "Invalid input samples do not corrupt the audio encoder");
-    EXPECT(audio_level_db((audio_level){0, 0}) == -60, "Silence reads -60 dB");
-    EXPECT(near(audio_level_db((audio_level){1, 0}), 0), "Full scale reads 0 dB");
+    EXPECT(audio_level_db((audio_level){0, 0, 0}) == -60, "Silence reads -60 dB");
+    EXPECT(near(audio_level_db((audio_level){1, 0, 0}), 0), "Full scale reads 0 dB");
     EXPECT(gain_db_clamp(100) == GAIN_DB_MAX && gain_db_clamp(-100) == GAIN_DB_MIN && gain_db_clamp(NAN) == 0,
            "Gain stays within -36...+12 dB");
     EXPECT(near(gain_from_db(0), 1), "0 dB is unity gain");
@@ -179,6 +181,7 @@ static void test_prefs(void) {
     EXPECT(Prefs.shape == SHAPE_CIRCLE && Prefs.mirrored && Prefs.width == OVERLAY_DEFAULT_WIDTH,
            "Defaults: circle, mirrored, 280 points");
     EXPECT(Prefs.center_stage, "Center Stage is enabled by default");
+    EXPECT(Prefs.auto_mic_level, "The automatic microphone level is on by default");
     Prefs.shape = SHAPE_RECTANGLE;
     Prefs.gain_db = -6;
     Prefs.has_origin = 1; Prefs.origin_x = 12; Prefs.origin_y = 34;
@@ -367,6 +370,34 @@ static void test_mutter_monitor_rect(void) {
     g_variant_unref(s);
 }
 
+/* Linux addition: the automatic microphone level. */
+static void test_mic_agc(void) {
+    const gint64 s = G_USEC_PER_SEC;
+    mic_agc a = {0};
+    EXPECT(mic_agc_step(&a, 1.0f, 10 * s) == MIC_AGC_CLIP_STEP_DB, "A clipped sample lowers the level at once");
+    EXPECT(mic_agc_step(&a, 1.0f, 10 * s + s / 10) == 0, "It then waits for the change to take effect");
+    a = (mic_agc){0};
+    mic_agc_step(&a, 0.95f, 20 * s);
+    EXPECT(mic_agc_step(&a, 0.5f, 22 * s + 1) == -MIC_AGC_STEP_DB, "Peaks close to clipping lower the level");
+    a = (mic_agc){0};
+    mic_agc_step(&a, 0.05f, 30 * s);
+    EXPECT(mic_agc_step(&a, 0.05f, 32 * s + 1) == MIC_AGC_STEP_DB, "Quiet speech raises the level");
+    a = (mic_agc){0};
+    mic_agc_step(&a, 0.001f, 40 * s);
+    EXPECT(mic_agc_step(&a, 0.001f, 42 * s + 1) == 0, "Silence does not raise the level");
+    a = (mic_agc){0};
+    mic_agc_step(&a, 0.3f, 50 * s);
+    EXPECT(mic_agc_step(&a, 0.3f, 52 * s + 1) == 0, "A good level is left alone");
+    EXPECT(near(mic_volume_after(0.22, -18.06), 0.11), "Volumes are cubic: -18 dB halves them");
+    EXPECT(mic_volume_after(0.9, 12) == MIC_VOLUME_MAX && mic_volume_after(0.06, -40) == MIC_VOLUME_MIN,
+           "The microphone volume stays within limits");
+    setlocale(LC_NUMERIC, "it_IT.UTF-8");   /* A comma locale must not break the parse. */
+    double parsed = mic_volume_parse("Volume: 0.22 [MUTED]");
+    setlocale(LC_NUMERIC, "C");
+    EXPECT(parsed == 0.22 && mic_volume_parse("Error") < 0,
+           "wpctl volumes are parsed, errors rejected");
+}
+
 int main(void) {
     test_overlay_geometry();
     test_area_corners();
@@ -378,6 +409,7 @@ int main(void) {
     test_transparency();
     test_center_stage();
     test_mutter_monitor_rect();
+    test_mic_agc();
     printf("Passed %d logic checks.\n", Checks);
     return 0;
 }

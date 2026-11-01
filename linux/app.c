@@ -23,7 +23,9 @@ static const char *HelpText =
     "which screen YouCam may record; the choice is remembered. Movies are saved automatically to "
     "your Desktop. Control–Alt–Super–R starts/stops; Control–Alt–Super–P pauses/resumes.\n\n"
     "Audio Input selects the microphone and offers an input-level slider and live meter. "
-    "Noise Reduction removes background noise from the recorded voice.\n\n"
+    "Noise Reduction removes background noise from the recorded voice. Automatic Microphone Level "
+    "adjusts the system microphone level while YouCam uses it, so the voice is neither too quiet nor "
+    "clipped, and puts the original level back afterwards.\n\n"
     "Show Recording Panel displays optional controls. Hide Camera lets you record just the screen.\n\n"
     "Transparency optionally lets you see through the camera while you work. Adjust it from the "
     "camera menu; Reset Transparency to 0% turns it off. Check Apply Transparency to Saved Video to "
@@ -613,6 +615,9 @@ static void build_noise_menu(GtkWidget *menu) {
     gtk_widget_show_all(menu);
 }
 
+/* Linux addition: the system microphone level, adjusted only while YouCam uses it. */
+static void toggle_auto_mic_level(void) { audio_set_auto_mic_level(!Prefs.auto_mic_level); }
+
 static void audio_menu_mapped(GtkWidget *w, gpointer d) { (void)w; (void)d; audio_monitor("menu", 1); }
 
 static void build_audio_menu(GtkWidget *menu) {
@@ -627,6 +632,8 @@ static void build_audio_menu(GtkWidget *menu) {
     add_slider_item(menu, audio_controls_new());
     add_separator(menu);
     build_noise_menu(add_submenu(menu, "Noise Reduction", !busy));
+    GtkWidget *agc = add_check(menu, "Automatic Microphone Level", Prefs.auto_mic_level, 0, 1);
+    g_signal_connect_swapped(agc, "activate", G_CALLBACK(toggle_auto_mic_level), NULL);
     add_item(menu, "Sound Settings…", open_sound_settings, 1);
     g_signal_connect(menu, "map", G_CALLBACK(audio_menu_mapped), NULL);
 }

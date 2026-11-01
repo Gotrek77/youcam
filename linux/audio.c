@@ -63,10 +63,11 @@ static gboolean deliver_level(gpointer data) {
     (void)data;
     g_mutex_lock(&A.lock);
     audio_level l = A.pending;
-    A.pending = (audio_level){0, 0};
+    A.pending = (audio_level){0, 0, 0};
     g_mutex_unlock(&A.lock);
     if (A.reasons && g_hash_table_size(A.reasons) && audio_has_audio()) {
         A.level = l;
+        mic_level_feed(l.source_peak);
         changed();
     }
     return G_SOURCE_REMOVE;
@@ -76,6 +77,7 @@ void audio_post_level(audio_level l) {
     g_mutex_lock(&A.lock);
     if (l.peak > A.pending.peak) A.pending.peak = l.peak;
     A.pending.clipped |= l.clipped;
+    if (l.source_peak > A.pending.source_peak) A.pending.source_peak = l.source_peak;
     gint64 now = g_get_monotonic_time();
     int post = now - A.last_post >= METER_INTERVAL_US;
     if (post) A.last_post = now;
@@ -139,7 +141,7 @@ static void meter_error(GstBus *bus, GstMessage *msg, gpointer data) {
     }
     set_status(err ? err->message : "The microphone stopped unexpectedly.");
     g_clear_error(&err);
-    A.level = (audio_level){0, 0};
+    A.level = (audio_level){0, 0, 0};
     changed();
 }
 
@@ -172,6 +174,18 @@ static void start_meter(void) {
     gst_element_set_state(p, GST_STATE_PLAYING);
 }
 
+/* The PipeWire object id of the selected microphone, for wpctl. */
+static char *mic_node(void) {
+    int i = find_mic(A.selected);
+    GstStructure *p = i >= 0 ? gst_device_get_properties(A.devices[i]) : NULL;
+    if (!p) return NULL;
+    const GValue *v = gst_structure_get_value(p, "object.id");
+    char *node = !v ? NULL : G_VALUE_HOLDS_STRING(v) ? g_value_dup_string(v)
+               : G_VALUE_HOLDS_INT(v) ? g_strdup_printf("%d", g_value_get_int(v)) : NULL;
+    gst_structure_free(p);
+    return node;
+}
+
 /* The meter pipeline serves the menu and panel; a recording opens its own
  * source (PipeWire lets several clients share a microphone). */
 static void update_monitoring(void) {
@@ -180,13 +194,23 @@ static void update_monitoring(void) {
     if (wants_meter && audio_has_audio()) start_meter();
     else stop_meter();
     if (!g_hash_table_size(A.reasons) || !audio_has_audio()) {
-        A.level = (audio_level){0, 0};
+        A.level = (audio_level){0, 0, 0};
         if (!A.status || strcmp(A.status, "Microphone disconnected") != 0)
             set_status(audio_has_audio() ? "Microphone idle" : "Audio off");
     } else if (find_mic(A.selected) >= 0) {
         set_status(A.selected);
     }
+    char *node = g_hash_table_size(A.reasons) && audio_has_audio() ? mic_node() : NULL;
+    mic_level_use(node);
+    g_free(node);
     changed();
+}
+
+void audio_set_auto_mic_level(int on) {
+    mic_level_use(NULL);               /* Put the level back before it is left alone. */
+    Prefs.auto_mic_level = on;
+    prefs_save();
+    update_monitoring();
 }
 
 void audio_monitor(const char *reason, int enabled) {
@@ -256,7 +280,8 @@ static void refresh_devices(void) {
     if (audio_has_audio() && find_mic(A.selected) < 0) {
         if (!was_disconnected) {
             stop_meter();
-            A.level = (audio_level){0, 0};
+            mic_level_use(NULL);
+            A.level = (audio_level){0, 0, 0};
             set_status("Microphone disconnected");
             if (A.on_device_lost) A.on_device_lost();
         }
@@ -275,6 +300,7 @@ static gboolean on_bus(GstBus *bus, GstMessage *msg, gpointer data) {
 }
 
 void audio_init(void (*on_change)(void), void (*on_device_lost)(void)) {
+    mic_level_recover();
     g_mutex_init(&A.lock);
     A.on_change = on_change;
     A.on_device_lost = on_device_lost;
@@ -293,5 +319,6 @@ void audio_init(void (*on_change)(void), void (*on_device_lost)(void)) {
 void audio_shutdown(void) {
     g_hash_table_remove_all(A.reasons);
     stop_meter();
+    mic_level_use(NULL);
     if (A.monitor) gst_device_monitor_stop(A.monitor);
 }
