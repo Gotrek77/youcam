@@ -16,7 +16,7 @@
 - No new runtime dependency: gst-libav is already required (AAC). Availability of the feature = `avenc_ffv1 && avdec_ffv1 && avdec_h264` factories (`export_available()`).
 - Lossless layer codec: **FFV1** (`avenc_ffv1` / `avdec_ffv1`), fed BGRA directly; it keeps alpha as `pix_fmt=bgra`. QTRLE is rejected: it cannot be muxed into `matroskamux`.
 - Encoder choice (VA → NVENC → x264), its bitrate and the container muxers are shared by `writer.c` and `export.c` through `video_encoder_chain()` and `container_for()`; nothing is duplicated.
-- Preference `savedTransparency` = `preview` | `opaque` | `later` replaces `recordCameraTransparency`: `true` → `preview`, `false` → `opaque`, missing → `preview`, unknown → `preview`. In C: `saved_transparency Prefs.saved_transparency`.
+- Preference `savedTransparency` = `preview` | `opaque` | `later` replaces `recordCameraTransparency`: `true` → `preview`, `false` → `opaque`, missing → `opaque`, unknown → `opaque` (today's default is opaque). In C: `saved_transparency Prefs.saved_transparency`.
 - CFLAGS stay `-std=c99 -D_DEFAULT_SOURCE -Wall -Wextra`; zero warnings. Declarations in `linux/youcam.h`, one section per file.
 - Comments are antirez-style `/* */` and explain why. No `ponytail:` tags.
 - Test counts today: `Passed 265 logic checks.`, `Passed 53 segmentation checks.`, `media ok: …`. Each task states the new counts.
@@ -44,7 +44,7 @@ Throwaway programs in `$SPIKE` (below). Results the steps depend on:
 - **Preview transparency is locked during a `later` recording without the extension.** The screen track then contains the translucent preview, and the export formula needs one `T_A` for the whole file, so the Transparency menu shows the value as a disabled line instead of the slider until the recording stops.
 - **"The usual Saved … notification"** does not exist as a desktop notification in the Linux port: success shows as the status line "Saved to Desktop" (menu, panel, tray tooltip) plus "Show Last Recording in Files", which `recording_set_last_path()` drives. A `later` stop clears the last path, so the status says "Ready to record" until the export succeeds.
 - **`.part` files:** the export writes `<name>.<ext>.part` on the Desktop (spec) and deletes it itself on failure or cancel; the start-up sweep touches only `pending/` (spec), where nothing normally writes a `.part`. A `.part` left on the Desktop by a crash during an export is left alone, as the spec forbids touching the Desktop.
-- **Default for a missing key is `preview`** as the spec says. Note: today's code defaults the check item to *unchecked* (opaque), see `tests.c` "the saved-video option is off by default" and README; new installs therefore change from opaque to Same as Preview. Migrated installs keep their choice.
+- **Default for a missing or unknown key is `opaque`**, today's default (the check item starts unchecked; see `tests.c` "the saved-video option is off by default" and README). The spec was corrected to match (controller ruling, 2026-11-01).
 - **Closing the dialog while saving cancels the export** (the `.part` is deleted, the project kept). The spec does not say; keeping a hidden export running would be surprising.
 - **One dialog at a time.** A `later` recording that stops while the dialog is open replaces the dialog's content (the older project stays in `pending/`), unless the dialog is saving; then the new project waits for the menu item.
 - **Alpha of antialiased edges:** the layer pixels are cairo's premultiplied ARGB, which the compositor reads as straight BGRA, exactly as today's composite path does; the outermost edge pixels are a shade darker in the export than in the dialog preview. Unchanged behaviour, not fixed here.
@@ -112,8 +112,8 @@ replace
 ```
 with
 ```c
-    EXPECT(Prefs.transparency == TRANSPARENCY_MAX && Prefs.saved_transparency == SAVED_PREVIEW,
-           "Saved transparency is normalized; the saved video follows the preview by default");
+    EXPECT(Prefs.transparency == TRANSPARENCY_MAX && Prefs.saved_transparency == SAVED_OPAQUE,
+           "Saved transparency is normalized; the saved video stays opaque by default");
     /* An old prefs.ini migrates, and the old key is gone after the next save. */
     g_file_set_contents(path, "[youcam]\nrecordCameraTransparency=false\n", -1, NULL);
     prefs_load();
@@ -145,8 +145,8 @@ static void test_saved_transparency(void) {
     EXPECT(saved_transparency_parse("opaque", 0, 0) == SAVED_OPAQUE, "Opaque is read back");
     EXPECT(saved_transparency_parse(NULL, 1, 1) == SAVED_PREVIEW, "A checked old option keeps the preview transparency");
     EXPECT(saved_transparency_parse(NULL, 1, 0) == SAVED_OPAQUE, "An unchecked old option stays opaque");
-    EXPECT(saved_transparency_parse(NULL, 0, 0) == SAVED_PREVIEW, "A fresh install follows the preview");
-    EXPECT(saved_transparency_parse("sometimes", 0, 0) == SAVED_PREVIEW, "Unknown values follow the preview");
+    EXPECT(saved_transparency_parse(NULL, 0, 0) == SAVED_OPAQUE, "A fresh install keeps today's opaque default");
+    EXPECT(saved_transparency_parse("sometimes", 0, 0) == SAVED_OPAQUE, "Unknown values fall back to opaque");
 }
 ```
 
@@ -190,16 +190,16 @@ const char *const SavedTransparencyNames[SAVED_COUNT] = {"preview", "opaque", "l
 
 /* savedTransparency replaced the check item "Apply Transparency to Saved
  * Video" (recordCameraTransparency): checked kept the preview transparency,
- * unchecked an opaque camera. A fresh install and unknown values follow
- * the preview. */
+ * unchecked an opaque camera. A fresh install and unknown values keep
+ * today's default, an opaque camera. */
 saved_transparency saved_transparency_parse(const char *value, int has_legacy, int legacy) {
     if (value) {
         for (int i = 0; i < SAVED_COUNT; i++)
             if (strcmp(value, SavedTransparencyNames[i]) == 0) return (saved_transparency)i;
-        return SAVED_PREVIEW;
+        return SAVED_OPAQUE;
     }
     if (has_legacy) return legacy ? SAVED_PREVIEW : SAVED_OPAQUE;
-    return SAVED_PREVIEW;
+    return SAVED_OPAQUE;
 }
 ```
 

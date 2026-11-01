@@ -16,7 +16,7 @@ The Transparency submenu's check item "Apply Transparency to Saved Video" become
 - **Opaque** — today's unchecked state.
 - **Choose After Recording** — new. Disabled, with an explanation, when the lossless layer codec is unavailable.
 
-Preference `recordCameraTransparency` (boolean) is replaced by `savedTransparency` = `preview` | `opaque` | `later`. Migration on load: `true` → `preview`, `false` → `opaque`, missing → `preview` (today's default). Unknown values → `preview`.
+Preference `recordCameraTransparency` (boolean) is replaced by `savedTransparency` = `preview` | `opaque` | `later`. Migration on load: `true` → `preview`, `false` → `opaque`, missing → `opaque` (today's default). Unknown values → `opaque`.
 
 ### Stop dialog
 
