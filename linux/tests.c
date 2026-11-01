@@ -109,6 +109,10 @@ static void test_audio_gain(void) {
     EXPECT(gain_db_clamp(100) == GAIN_DB_MAX && gain_db_clamp(-100) == GAIN_DB_MIN && gain_db_clamp(NAN) == 0,
            "Gain stays within -36...+12 dB");
     EXPECT(near(gain_from_db(0), 1), "0 dB is unity gain");
+    EXPECT(noise_reduction_clamp(0) == 0 && noise_reduction_clamp(4) == 4,
+           "Noise reduction keeps Off...Very High");
+    EXPECT(noise_reduction_clamp(-1) == NOISE_REDUCTION_DEFAULT && noise_reduction_clamp(9) == NOISE_REDUCTION_DEFAULT,
+           "A corrupt noise reduction preference falls back to Moderate");
 }
 
 static void test_files_and_labels(void) {

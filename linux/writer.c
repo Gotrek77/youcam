@@ -170,12 +170,32 @@ static gboolean finish_timeout(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+/* Linux addition: WebRTC noise suppression (the one in browsers' calls) plus
+ * its high-pass filter, which removes hum and room noise from cheap built-in
+ * microphones. Echo cancelling and automatic gain stay off: nothing plays back
+ * and the user owns the gain. Missing plugin: record unprocessed. */
+static char *noise_reduction_element(int level) {
+    static const char *names[] = {"", "low", "moderate", "high", "very-high"};
+    level = noise_reduction_clamp(level);
+    GstElementFactory *f = gst_element_factory_find("webrtcdsp");
+    if (!level || !f) {
+        if (f) gst_object_unref(f);
+        return g_strdup("");
+    }
+    gst_object_unref(f);
+    return g_strdup_printf("audio/x-raw,format=S16LE,channels=1,rate=48000 ! "
+        "webrtcdsp echo-cancel=false gain-control=false high-pass-filter=true "
+        "noise-suppression=true noise-suppression-level=%s ! audioconvert ! ", names[level]);
+}
+
 writer *writer_start(const char *path, const char *video_source, GstElement *mic,
                      const rect *crop_fraction, int camera_layer, writer_callbacks cb, GError **err) {
+    char *denoise = noise_reduction_element(Prefs.noise_reduction);
     char *audio = mic ? g_strdup_printf(
-        "audioconvert name=aconvert ! audioresample ! "
+        "audioconvert name=aconvert ! audioresample ! %s"
         "audio/x-raw,format=F32LE,channels=1,rate=48000 ! identity name=gain ! "
-        "audioconvert ! avenc_aac bitrate=%d ! queue ! mux. ", AUDIO_BITRATE) : g_strdup("");
+        "audioconvert ! avenc_aac bitrate=%d ! queue ! mux. ", denoise, AUDIO_BITRATE) : g_strdup("");
+    g_free(denoise);
     /* Optional camera layer: an appsrc composited over the screen. */
     const char *layer = camera_layer
         ? "videoconvert ! comp.sink_0 "

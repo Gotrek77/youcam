@@ -22,7 +22,8 @@ static const char *HelpText =
     "Screen to remove the dimming.\n\nStart Recording when ready. The first time, the system asks "
     "which screen YouCam may record; the choice is remembered. Movies are saved automatically to "
     "your Desktop. Control–Alt–Super–R starts/stops; Control–Alt–Super–P pauses/resumes.\n\n"
-    "Audio Input selects the microphone and offers an input-level slider and live meter.\n\n"
+    "Audio Input selects the microphone and offers an input-level slider and live meter. "
+    "Noise Reduction removes background noise from the recorded voice.\n\n"
     "Show Recording Panel displays optional controls. Hide Camera lets you record just the screen.\n\n"
     "Transparency optionally lets you see through the camera while you work. Adjust it from the "
     "camera menu; Reset Transparency to 0% turns it off. Check Apply Transparency to Saved Video to "
@@ -585,6 +586,22 @@ static void open_sound_settings(void) {
         g_spawn_command_line_async("pavucontrol", NULL);
 }
 
+/* Linux addition: applied when a recording starts, so it is locked while recording. */
+static void select_noise_level(const char *value) {
+    Prefs.noise_reduction = noise_reduction_clamp(atoi(value));
+    prefs_save();
+}
+
+static void build_noise_menu(GtkWidget *menu) {
+    static const char *labels[] = {"Off", "Low", "Moderate", "High", "Very High"};
+    for (int i = 0; i < NOISE_REDUCTION_LEVELS; i++) {
+        char value[4];
+        snprintf(value, sizeof(value), "%d", i);
+        add_choice(menu, labels[i], value, Prefs.noise_reduction == i, 1, select_noise_level);
+    }
+    gtk_widget_show_all(menu);
+}
+
 static void audio_menu_mapped(GtkWidget *w, gpointer d) { (void)w; (void)d; audio_monitor("menu", 1); }
 
 static void build_audio_menu(GtkWidget *menu) {
@@ -598,6 +615,7 @@ static void build_audio_menu(GtkWidget *menu) {
     add_separator(menu);
     add_slider_item(menu, audio_controls_new());
     add_separator(menu);
+    build_noise_menu(add_submenu(menu, "Noise Reduction", !busy));
     add_item(menu, "Sound Settings…", open_sound_settings, 1);
     g_signal_connect(menu, "map", G_CALLBACK(audio_menu_mapped), NULL);
 }

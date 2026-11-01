@@ -115,7 +115,10 @@ int main(int argc, char **argv) {
     char *dir = g_dir_make_tmp("youcam-media-XXXXXX", NULL);
     char *path = g_build_filename(dir, "pause-resume.mov", NULL);
 
+    /* The main movie also runs the microphone through WebRTC noise reduction. */
+    Prefs.noise_reduction = NOISE_REDUCTION_DEFAULT;
     GstDiscovererInfo *info = record(path, 1, 1, 0);
+    Prefs.noise_reduction = 0;
     double duration = (double)gst_discoverer_info_get_duration(info) / GST_SECOND;
     GList *videos = gst_discoverer_info_get_video_streams(info);
     GList *audios = gst_discoverer_info_get_audio_streams(info);

@@ -68,6 +68,9 @@ typedef struct { float peak; int clipped; } audio_level;
 audio_level audio_gain_apply(float *samples, size_t count, float gain);
 float audio_level_db(audio_level level);
 double gain_db_clamp(double db);
+#define NOISE_REDUCTION_LEVELS 5     /* Off, then webrtcdsp levels low...very high. */
+#define NOISE_REDUCTION_DEFAULT 2    /* Moderate: removes room hum, keeps the voice natural. */
+int noise_reduction_clamp(int level);
 float gain_from_db(double db);
 char *recording_next_path(const char *dir, time_t when);
 void recording_time_label(double seconds, char *buf, size_t len);
@@ -103,6 +106,7 @@ typedef struct {
     double transparency;   /* Camera preview transparency, 0...0.8. */
     int record_transparency; /* Apply it to the saved video too. */
     int center_stage;      /* Follow the face (default on). */
+    int noise_reduction;   /* Linux only: 0 off, 1...4 = WebRTC suppression low...very high. */
 } prefs;
 
 extern prefs Prefs;

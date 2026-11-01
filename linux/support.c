@@ -33,6 +33,10 @@ double gain_db_clamp(double db) {
     return fmin(GAIN_DB_MAX, fmax(GAIN_DB_MIN, db));
 }
 
+int noise_reduction_clamp(int level) {
+    return level < 0 || level >= NOISE_REDUCTION_LEVELS ? NOISE_REDUCTION_DEFAULT : level;
+}
+
 float gain_from_db(double db) { return powf(10, gain_db_clamp(db) / 20); }
 
 /* YouCam-Recording-<ddMMM-HH.mm.ss>.mov, never overwriting: -2, -3, ...

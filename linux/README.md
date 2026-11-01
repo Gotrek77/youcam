@@ -32,7 +32,9 @@ need. `make uninstall` removes everything `make install` added.
   is remembered. Movies save automatically to
   `~/Desktop/YouCam-Recording-<date>-<time>.mov`.
 - **Audio Input** selects a microphone and provides a gain slider and live
-  level meter. System/app audio is not recorded.
+  level meter. System/app audio is not recorded. **Noise Reduction** (Linux
+  only: Off, Low, Moderate, High, Very High; default Moderate) removes hum and
+  room noise from the recorded microphone with WebRTC noise suppression.
 - **Transparency** optionally makes the camera see-through so you can see
   what it covers. Adjust the slider from 0% to 80%, or choose **Reset
   Transparency to 0%** to turn it off. Check **Apply Transparency to Saved
