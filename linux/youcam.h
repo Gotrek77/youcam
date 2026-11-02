@@ -73,6 +73,7 @@ double gain_db_clamp(double db);
 int noise_reduction_clamp(int level);
 float gain_from_db(double db);
 char *recording_next_path(const char *dir, time_t when, const char *ext);
+char *recording_base_name(time_t when);   /* YouCam-Recording-<ddMMM-HH.mm.ss>. Caller frees. */
 
 /* Linux addition: the recording container. Every one holds H.264 + AAC. */
 typedef struct { const char *ext, *muxer, *label; } container;
@@ -264,6 +265,15 @@ void center_stage_init(void (*on_change)(void));
 
 typedef struct writer writer;
 
+/* Choose After Recording: what is needed to finish a project (export.c). */
+typedef struct {
+    double t_a;          /* Camera transparency in the screen track: 1 = absent (extension), else the preview's. */
+    double preview;      /* Preview transparency when the recording started: where the slider starts. */
+    char container[8];   /* Extension of the final movie (Containers[]). */
+    int has_audio;
+} project_info;
+#define PROJECT_INFO_MAX 160    /* project_info_format() text, NUL included. */
+
 typedef struct {
     void (*finished)(const char *path, void *ud);
     void (*failed)(const char *message, void *ud);
@@ -282,6 +292,21 @@ double writer_elapsed(writer *w);
 void writer_finish(writer *w);
 void writer_cancel(writer *w);
 void pipeline_stop_async(GstElement *pipeline);
+
+/* ------------------------------------------------------------ export.c --- */
+
+#define PROJECT_SUFFIX ".youcam.mkv"
+
+double later_max(double t_a);                  /* Slider maximum: min(T_A, 0.8). */
+double later_alpha(double t, double t_a);      /* Layer opacity for a final transparency t: 1 - t / T_A. */
+int project_info_format(const project_info *p, char *buf, size_t len);
+int project_info_parse(const guint8 *bytes, size_t len, project_info *out);   /* Untrusted bytes. */
+int project_read_info(const char *path, project_info *out);
+char *project_dir(void);                       /* ~/.local/share/youcam/pending, not created. */
+char *project_new_path(const char *dir, time_t when);
+char *project_latest(const char *dir);         /* Newest *.youcam.mkv, NULL if none. */
+void project_clean_parts(const char *dir);
+char *export_output_path(const char *dir, const char *project, const char *ext);
 
 /* ------------------------------------------------------------ portal.c --- */
 

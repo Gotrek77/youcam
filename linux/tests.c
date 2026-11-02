@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <utime.h>
 #include <glib/gstdio.h>
 #include "youcam.h"
 
@@ -556,6 +557,72 @@ static void test_background_paint(void) {
     EXPECT(render_pixel(BG_TRANSPARENT, 61) >> 24 == 0, "Transparent leaves the background empty");
 }
 
+/* Choose After Recording (export.c): layer opacity, slider limit, the
+ * project settings in the MKV header, and file names. */
+static void test_later(void) {
+    EXPECT(near(later_alpha(0, 1), 1) && near(later_alpha(0.4, 1), 0.6) && near(later_alpha(0.8, 1), 0.2),
+           "With the extension the camera layer opacity is 1 - t");
+    EXPECT(near(later_alpha(0, 0.3), 1) && near(later_alpha(0.15, 0.3), 0.5) && near(later_alpha(0.3, 0.3), 0),
+           "Without it the layer fades out at the preview transparency");
+    EXPECT(later_alpha(0, 0) == 1 && later_alpha(0.5, 0) == 1, "An opaque preview without the extension keeps the camera opaque");
+    EXPECT(later_alpha(0.9, 0.3) == 0 && later_alpha(-1, 0.3) == 1 && later_alpha(NAN, 0.3) == 1,
+           "Choices outside the range are clamped");
+    double t_a = 0.6, t = 0.25, a = later_alpha(t, t_a);
+    EXPECT(near(1 - (a + (1 - a) * (1 - t_a)), t), "The exported camera has exactly the chosen transparency");
+    EXPECT(near(later_max(1), TRANSPARENCY_MAX) && near(later_max(0.3), 0.3) && later_max(0) == 0 && later_max(NAN) == 0,
+           "The slider reaches 80% with the extension, the preview transparency without");
+
+    project_info in = {1, 0.3, "mp4", 1}, out = {0};
+    char text[PROJECT_INFO_MAX];
+    EXPECT(project_info_format(&in, text, sizeof(text)), "Project settings fit their header field");
+    guint8 header[512];
+    for (size_t i = 0; i < sizeof(header); i++) header[i] = (guint8)(i * 37);   /* Binary MKV bytes around it. */
+    memcpy(header + 288, text, strlen(text));
+    EXPECT(project_info_parse(header, sizeof(header), &out) && out.t_a == 1 && near(out.preview, 0.3) &&
+           strcmp(out.container, "mp4") == 0 && out.has_audio, "Project settings are found inside the MKV header");
+    EXPECT(!project_info_parse(header, 288, &out), "A file without them is not a project");
+    EXPECT(!project_info_parse(header, 288 + 20, &out), "Truncated settings are rejected");
+    const char *bad = "YouCam project;YOUCAM_T_A=banana;YOUCAM_PREVIEW_TRANSPARENCY=0.3;YOUCAM_CONTAINER=mov;YOUCAM_AUDIO=1;";
+    EXPECT(!project_info_parse((const guint8 *)bad, strlen(bad), &out), "Corrupt settings are rejected");
+    const char *range = "YouCam project;YOUCAM_T_A=2;YOUCAM_PREVIEW_TRANSPARENCY=0.3;YOUCAM_CONTAINER=mov;YOUCAM_AUDIO=1;";
+    EXPECT(!project_info_parse((const guint8 *)range, strlen(range), &out), "Out-of-range settings are rejected");
+    const char *odd = "YouCam project;YOUCAM_T_A=1;YOUCAM_PREVIEW_TRANSPARENCY=0;YOUCAM_CONTAINER=webm;YOUCAM_AUDIO=0;";
+    EXPECT(project_info_parse((const guint8 *)odd, strlen(odd), &out) && strcmp(out.container, "mov") == 0 &&
+           !out.has_audio, "An unknown container falls back to MOV");
+
+    char *dir = g_dir_make_tmp("youcam-later-XXXXXX", NULL);
+    const char *project = "/x/pending/YouCam-Recording-01Nov-10.00.00" PROJECT_SUFFIX;
+    char *first = export_output_path(dir, project, "mov");
+    char *expected = g_build_filename(dir, "YouCam-Recording-01Nov-10.00.00.mov", NULL);
+    EXPECT(strcmp(first, expected) == 0, "The movie takes the project's name and the chosen format");
+    g_file_set_contents(first, "", 0, NULL);
+    char *second = export_output_path(dir, project, "mov");
+    EXPECT(g_str_has_suffix(second, "/YouCam-Recording-01Nov-10.00.00 (2).mov"), "An existing movie is never overwritten");
+    g_file_set_contents(second, "", 0, NULL);
+    char *third = export_output_path(dir, project, "mov");
+    EXPECT(g_str_has_suffix(third, " (3).mov"), "The number keeps counting");
+    char *fresh = project_new_path(dir, 0), *base = recording_base_name(0);
+    EXPECT(g_str_has_suffix(fresh, PROJECT_SUFFIX) && strstr(fresh, base), "A project is named like the movie it becomes");
+    char *old = g_build_filename(dir, "a" PROJECT_SUFFIX, NULL), *recent = g_build_filename(dir, "b" PROJECT_SUFFIX, NULL);
+    char *part = g_build_filename(dir, "c.mov.part", NULL);
+    g_file_set_contents(old, "", 0, NULL);
+    g_file_set_contents(recent, "", 0, NULL);
+    g_file_set_contents(part, "", 0, NULL);
+    struct utimbuf t_old = {1000, 1000}, t_recent = {2000, 2000};
+    g_utime(old, &t_old);
+    g_utime(recent, &t_recent);
+    char *latest = project_latest(dir);
+    EXPECT(latest && strcmp(latest, recent) == 0, "The most recent project is the one opened");
+    project_clean_parts(dir);
+    EXPECT(!g_file_test(part, G_FILE_TEST_EXISTS) && g_file_test(old, G_FILE_TEST_EXISTS),
+           "Stale .part files go, projects stay");
+    EXPECT(!project_latest("/nonexistent-youcam-pending"), "No pending folder, no project");
+    g_unlink(first); g_unlink(second); g_unlink(old); g_unlink(recent);
+    g_rmdir(dir);
+    g_free(first); g_free(expected); g_free(second); g_free(third); g_free(fresh); g_free(base);
+    g_free(old); g_free(recent); g_free(part); g_free(latest); g_free(dir);
+}
+
 int main(void) {
     test_overlay_geometry();
     test_area_corners();
@@ -566,6 +633,7 @@ int main(void) {
     test_prefs();
     test_transparency();
     test_saved_transparency();
+    test_later();
     test_center_stage();
     test_background();
     test_background_paint();

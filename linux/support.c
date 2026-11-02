@@ -55,22 +55,27 @@ const container *container_for(const char *ext) {
     return &Containers[0];
 }
 
-/* YouCam-Recording-<ddMMM-HH.mm.ss>.<ext>, never overwriting: -2, -3, ...
- * Month names are always English (en_US_POSIX on macOS). Caller frees. */
-char *recording_next_path(const char *dir, time_t when, const char *ext) {
+/* YouCam-Recording-<ddMMM-HH.mm.ss>. Month names are always English
+ * (en_US_POSIX on macOS). Caller frees. */
+char *recording_base_name(time_t when) {
     static const char *months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
     struct tm tm;
     localtime_r(&when, &tm);
-    char base[64];
-    snprintf(base, sizeof(base), "YouCam-Recording-%02d%s-%02d.%02d.%02d",
-             tm.tm_mday, months[tm.tm_mon], tm.tm_hour, tm.tm_min, tm.tm_sec);
+    return g_strdup_printf("YouCam-Recording-%02d%s-%02d.%02d.%02d",
+                           tm.tm_mday, months[tm.tm_mon], tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+/* <dir>/<base name>.<ext>, never overwriting: -2, -3, ... Caller frees. */
+char *recording_next_path(const char *dir, time_t when, const char *ext) {
+    char *base = recording_base_name(when);
     ext = container_for(ext)->ext;
     char *path = g_strdup_printf("%s/%s.%s", dir, base, ext);
     for (int suffix = 2; g_file_test(path, G_FILE_TEST_EXISTS); suffix++) {
         g_free(path);
         path = g_strdup_printf("%s/%s-%d.%s", dir, base, suffix, ext);
     }
+    g_free(base);
     return path;
 }
 

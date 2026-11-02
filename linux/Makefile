@@ -9,7 +9,7 @@ CFLAGS += -std=c99 -D_DEFAULT_SOURCE -Wall -Wextra $(shell pkg-config --cflags $
 LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 
 CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o segment.o background.o
-MEDIA := writer.o audio.o
+MEDIA := writer.o audio.o export.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
        recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
 ICON_SIZES := 16 32 48 128 256 512
@@ -21,7 +21,7 @@ all: youcam
 youcam: $(APP)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
-tests: tests.o $(CORE)
+tests: tests.o $(MEDIA) $(CORE)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
 
 test-media: test_media.o $(MEDIA) $(CORE)
