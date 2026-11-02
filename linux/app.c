@@ -476,7 +476,7 @@ static gboolean layer_tick(gpointer data) {
     }
     int out_w, out_h, x, y, cw, ch;
     const camera_frame *f = camera_current_frame();
-    int needed = f && camera_layer_needed(Prefs.transparency, Prefs.record_transparency,
+    int needed = f && camera_layer_needed(Prefs.transparency, Prefs.saved_transparency == SAVED_PREVIEW,
                                           App.visible, camera_state() == CAMERA_RUNNING);
     if (!needed || !writer_output_size(w, &out_w, &out_h)) {
         writer_push_camera(w, NULL, 0, 0, 0, 0, 0, 0);
@@ -524,7 +524,7 @@ static gboolean toggle_record_transparency(GtkWidget *item, GdkEventButton *ev, 
     (void)ev; (void)d;
     GtkCheckMenuItem *check = GTK_CHECK_MENU_ITEM(item);
     gtk_check_menu_item_set_active(check, !gtk_check_menu_item_get_active(check));
-    Prefs.record_transparency = gtk_check_menu_item_get_active(check);
+    Prefs.saved_transparency = gtk_check_menu_item_get_active(check) ? SAVED_PREVIEW : SAVED_OPAQUE;
     prefs_save();
     return TRUE;
 }
@@ -551,7 +551,7 @@ static void build_transparency_menu(GtkWidget *menu) {
     gtk_fixed_put(GTK_FIXED(fixed), slider, 12, 33);
     add_slider_item(menu, fixed);
     add_separator(menu);
-    GtkWidget *save = add_check(menu, "Apply Transparency to Saved Video", Prefs.record_transparency, 0, 1);
+    GtkWidget *save = add_check(menu, "Apply Transparency to Saved Video", Prefs.saved_transparency == SAVED_PREVIEW, 0, 1);
     g_signal_connect(save, "button-release-event", G_CALLBACK(toggle_record_transparency), NULL);
     add_item(menu, "Reset Transparency to 0%", reset_transparency, 1);
 }

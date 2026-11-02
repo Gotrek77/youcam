@@ -101,6 +101,12 @@ typedef struct {
 /* What replaces the background behind the person (background.c). */
 typedef enum { BG_OFF, BG_TRANSPARENT, BG_BLUR, BG_IMAGE, BG_COLOR, BG_COUNT } background_mode;
 
+/* What the saved video shows of the camera transparency. Linux adds
+ * SAVED_LATER: the transparency is chosen after recording (export.c). */
+typedef enum { SAVED_PREVIEW, SAVED_OPAQUE, SAVED_LATER, SAVED_COUNT } saved_transparency;
+extern const char *const SavedTransparencyNames[SAVED_COUNT];   /* Prefs values: "preview", "opaque", "later". */
+saved_transparency saved_transparency_parse(const char *value, int has_legacy, int legacy);
+
 typedef struct {
     camera_shape shape;
     int mirrored;
@@ -113,7 +119,7 @@ typedef struct {
     recording_area area;
     char *restore_token;   /* ScreenCast portal: remembers the shared monitor. */
     double transparency;   /* Camera preview transparency, 0...0.8. */
-    int record_transparency; /* Apply it to the saved video too. */
+    saved_transparency saved_transparency;   /* Same as the preview, opaque, or chosen after recording. */
     int center_stage;      /* Follow the face (default on). */
     int noise_reduction;   /* Linux only: 0 off, 1...4 = WebRTC suppression low...very high. */
     char *container;       /* Linux only: file extension of Containers[], NULL = mov. */

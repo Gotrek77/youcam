@@ -189,7 +189,7 @@ static void test_prefs(void) {
     Prefs.area = (recording_area){AREA_REGION, "HDMI-1", {10, 20, 300, 200}};
     prefs_set_string(&Prefs.restore_token, "token");
     Prefs.transparency = 0.55;
-    Prefs.record_transparency = 1;
+    Prefs.saved_transparency = SAVED_LATER;
     Prefs.center_stage = 0;
     Prefs.background_mode = BG_BLUR;
     prefs_set_string(&Prefs.background_color, "#102030");
@@ -201,7 +201,7 @@ static void test_prefs(void) {
     EXPECT(Prefs.area.mode == AREA_REGION && strcmp(Prefs.area.monitor, "HDMI-1") == 0 &&
            rect_equal(Prefs.area.local, (rect){10, 20, 300, 200}), "The recording area survives a reload");
     EXPECT(strcmp(Prefs.restore_token, "token") == 0, "The shared monitor is remembered");
-    EXPECT(Prefs.transparency == 0.55 && Prefs.record_transparency, "Both transparency choices are remembered");
+    EXPECT(Prefs.transparency == 0.55 && Prefs.saved_transparency == SAVED_LATER, "Both transparency choices are remembered");
     EXPECT(!Prefs.center_stage, "Turning Center Stage off is remembered");
     EXPECT(Prefs.background_mode == BG_BLUR && strcmp(Prefs.background_color, "#102030") == 0,
            "The background choice is remembered");
@@ -210,8 +210,18 @@ static void test_prefs(void) {
     g_file_set_contents(path, "[youcam]\nwidth=banana\ncameraPreviewTransparency=5\n", -1, NULL);
     prefs_load();
     EXPECT(Prefs.width == OVERLAY_DEFAULT_WIDTH, "Corrupt values fall back to defaults");
-    EXPECT(Prefs.transparency == TRANSPARENCY_MAX && !Prefs.record_transparency,
-           "Saved transparency is normalized; the saved-video option is off by default");
+    EXPECT(Prefs.transparency == TRANSPARENCY_MAX && Prefs.saved_transparency == SAVED_OPAQUE,
+           "Saved transparency is normalized; the saved video stays opaque by default");
+    /* An old prefs.ini migrates, and the old key is gone after the next save. */
+    g_file_set_contents(path, "[youcam]\nrecordCameraTransparency=false\n", -1, NULL);
+    prefs_load();
+    EXPECT(Prefs.saved_transparency == SAVED_OPAQUE, "An unchecked Apply Transparency to Saved Video becomes Opaque");
+    prefs_save();
+    char *saved = NULL;
+    g_file_get_contents(path, &saved, NULL, NULL);
+    EXPECT(saved && strstr(saved, "savedTransparency=opaque") && !strstr(saved, "recordCameraTransparency"),
+           "The old key is replaced by savedTransparency on the next save");
+    g_free(saved);
     g_unlink(path);
     g_rmdir(dir);
     g_free(path); g_free(dir);
@@ -223,7 +233,7 @@ static void test_transparency(void) {
     for (int i = 0; i < 5; i++)
         EXPECT(transparency_normalize(inputs[i][0]) == inputs[i][1], "Invalid values cannot make the preview invisible");
     EXPECT(!camera_layer_needed(0, 0, 1, 1), "An opaque preview is recorded as captured");
-    EXPECT(camera_layer_needed(0.55, 0, 1, 1), "Saved video stays opaque by default even with a translucent preview");
+    EXPECT(camera_layer_needed(0.55, 0, 1, 1), "An opaque saved video gets the camera copy over a translucent preview");
     EXPECT(!camera_layer_needed(0.55, 1, 1, 1), "Applying transparency to the video records the capture as is");
     EXPECT(!camera_layer_needed(0.55, 0, 0, 1) && !camera_layer_needed(0.55, 0, 1, 0),
            "A hidden or stopped camera adds nothing to the movie");
@@ -269,6 +279,16 @@ static void test_transparency(void) {
         }
     }
     g_free(f.data);
+}
+
+/* savedTransparency and its migration from recordCameraTransparency. */
+static void test_saved_transparency(void) {
+    EXPECT(saved_transparency_parse("later", 1, 0) == SAVED_LATER, "The new key wins over the old one");
+    EXPECT(saved_transparency_parse("opaque", 0, 0) == SAVED_OPAQUE, "Opaque is read back");
+    EXPECT(saved_transparency_parse(NULL, 1, 1) == SAVED_PREVIEW, "A checked old option keeps the preview transparency");
+    EXPECT(saved_transparency_parse(NULL, 1, 0) == SAVED_OPAQUE, "An unchecked old option stays opaque");
+    EXPECT(saved_transparency_parse(NULL, 0, 0) == SAVED_OPAQUE, "A fresh install keeps today's opaque default");
+    EXPECT(saved_transparency_parse("sometimes", 0, 0) == SAVED_OPAQUE, "Unknown values fall back to opaque");
 }
 
 /* Center Stage (PR antirez/youcam#1): soft clamp, zoom, smoothing, the
@@ -545,6 +565,7 @@ int main(void) {
     test_panel_buttons();
     test_prefs();
     test_transparency();
+    test_saved_transparency();
     test_center_stage();
     test_background();
     test_background_paint();

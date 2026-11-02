@@ -13,6 +13,22 @@ static char *PrefsPath;
 
 static const char *AreaModes[] = {"wholeScreen", "display", "region"};
 
+const char *const SavedTransparencyNames[SAVED_COUNT] = {"preview", "opaque", "later"};
+
+/* savedTransparency replaced the check item "Apply Transparency to Saved
+ * Video" (recordCameraTransparency): checked kept the preview transparency,
+ * unchecked an opaque camera. A fresh install and unknown values keep
+ * today's default, an opaque camera. */
+saved_transparency saved_transparency_parse(const char *value, int has_legacy, int legacy) {
+    if (value) {
+        for (int i = 0; i < SAVED_COUNT; i++)
+            if (strcmp(value, SavedTransparencyNames[i]) == 0) return (saved_transparency)i;
+        return SAVED_OPAQUE;
+    }
+    if (has_legacy) return legacy ? SAVED_PREVIEW : SAVED_OPAQUE;
+    return SAVED_OPAQUE;
+}
+
 void prefs_set_string(char **field, const char *value) {
     char *copy = value ? g_strdup(value) : NULL;
     g_free(*field);
@@ -58,7 +74,12 @@ void prefs_load(void) {
     Prefs.gain_db = gain_db_clamp(key_double(kf, "youcam", "audioGainDB", 0, NULL));
     Prefs.restore_token = g_key_file_get_string(kf, "youcam", "restoreToken", NULL);
     Prefs.transparency = transparency_normalize(key_double(kf, "youcam", "cameraPreviewTransparency", 0, NULL));
-    Prefs.record_transparency = g_key_file_get_boolean(kf, "youcam", "recordCameraTransparency", NULL);
+    char *saved = g_key_file_get_string(kf, "youcam", "savedTransparency", NULL);
+    GError *legacy_err = NULL;
+    gboolean legacy = g_key_file_get_boolean(kf, "youcam", "recordCameraTransparency", &legacy_err);
+    Prefs.saved_transparency = saved_transparency_parse(saved, legacy_err == NULL, legacy);
+    g_clear_error(&legacy_err);
+    g_free(saved);
     Prefs.center_stage = (int)key_double(kf, "youcam", "centerStage", 1, NULL);
     Prefs.container = g_key_file_get_string(kf, "youcam", "container", NULL);
     Prefs.auto_mic_level = (int)key_double(kf, "youcam", "autoMicLevel", 1, NULL);
@@ -102,7 +123,7 @@ void prefs_save(void) {
     g_key_file_set_double(kf, "youcam", "audioGainDB", Prefs.gain_db);
     set_string(kf, "youcam", "restoreToken", Prefs.restore_token);
     g_key_file_set_double(kf, "youcam", "cameraPreviewTransparency", Prefs.transparency);
-    g_key_file_set_boolean(kf, "youcam", "recordCameraTransparency", Prefs.record_transparency);
+    g_key_file_set_string(kf, "youcam", "savedTransparency", SavedTransparencyNames[Prefs.saved_transparency]);
     g_key_file_set_integer(kf, "youcam", "noiseReduction", Prefs.noise_reduction);
     g_key_file_set_string(kf, "youcam", "container", container_for(Prefs.container)->ext);
     g_key_file_set_double(kf, "youcam", "centerStage", Prefs.center_stage);
