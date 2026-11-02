@@ -160,8 +160,8 @@ static void check_project_tracks(GstDiscovererInfo *info) {
     gst_discoverer_stream_info_list_free(audios);
 }
 
-/* Decodes frame number 'index' and counts strongly red pixels on 'row'. */
-static int red_pixels_on_row(const char *path, int index, int row) {
+/* Decodes frame number 'index' of a movie as packed RGB. Caller unrefs. */
+static GstSample *frame_at(const char *path, int index, int *width) {
     char *desc = g_strdup_printf("filesrc location=\"%s\" ! decodebin ! videoconvert ! "
                                  "video/x-raw,format=RGB ! appsink name=sink sync=false", path);
     GstElement *p = gst_parse_launch(desc, NULL);
@@ -174,25 +174,86 @@ static int red_pixels_on_row(const char *path, int index, int row) {
         g_signal_emit_by_name(sink, "pull-sample", &sample);
         if (!sample) break;
     }
-    int count = 0;
-    if (sample) {
-        int w = 0;
-        gst_structure_get_int(gst_caps_get_structure(gst_sample_get_caps(sample), 0), "width", &w);
-        GstMapInfo map;
-        GstBuffer *buf = gst_sample_get_buffer(sample);
-        gst_buffer_map(buf, &map, GST_MAP_READ);
-        int stride = (w * 3 + 3) & ~3;
-        for (int x = 0; x < w; x++) {
-            const guint8 *px = map.data + row * stride + x * 3;
-            if (px[0] > 200 && px[1] < 60 && px[2] < 60) count++;
-        }
-        gst_buffer_unmap(buf, &map);
-        gst_sample_unref(sample);
-    }
+    *width = 0;
+    if (sample) gst_structure_get_int(gst_caps_get_structure(gst_sample_get_caps(sample), 0), "width", width);
     gst_element_set_state(p, GST_STATE_NULL);
     gst_object_unref(sink);
     gst_object_unref(p);
+    return sample;
+}
+
+#define RGB_STRIDE(w) (((w) * 3 + 3) & ~3)
+
+/* Counts strongly red pixels on 'row' of frame 'index'. */
+static int red_pixels_on_row(const char *path, int index, int row) {
+    int w, count = 0;
+    GstSample *sample = frame_at(path, index, &w);
+    if (!sample) return 0;
+    GstMapInfo map;
+    GstBuffer *buf = gst_sample_get_buffer(sample);
+    gst_buffer_map(buf, &map, GST_MAP_READ);
+    for (int x = 0; x < w; x++) {
+        const guint8 *px = map.data + row * RGB_STRIDE(w) + x * 3;
+        if (px[0] > 200 && px[1] < 60 && px[2] < 60) count++;
+    }
+    gst_buffer_unmap(buf, &map);
+    gst_sample_unref(sample);
     return count;
+}
+
+static void pixel_at(const char *path, int index, int x, int y, guint8 rgb[3]) {
+    int w;
+    GstSample *sample = frame_at(path, index, &w);
+    EXPECT(sample && x < w, "frame %d of %s decodes", index, path);
+    GstMapInfo map;
+    GstBuffer *buf = gst_sample_get_buffer(sample);
+    gst_buffer_map(buf, &map, GST_MAP_READ);
+    memcpy(rgb, map.data + (size_t)y * RGB_STRIDE(w) + (size_t)x * 3, 3);
+    gst_buffer_unmap(buf, &map);
+    gst_sample_unref(sample);
+}
+
+#define CX (SQUARE_X + SQUARE / 2)   /* Camera centre in movie pixels. */
+#define CY (SQUARE_Y + SQUARE / 2)
+#define MIX_TOLERANCE 30             /* Two H.264 passes. */
+
+static guint32 surface_pixel(cairo_surface_t *s, int x, int y) {
+    cairo_surface_flush(s);
+    return *(guint32 *)(cairo_image_surface_get_data(s) + y * cairo_image_surface_get_stride(s) + x * 4);
+}
+
+/* The dialog's stills: the blue screen, and the layer with the opaque red
+ * square on transparency. 640 wide, the movie's own width. */
+static void check_stills(const char *path) {
+    cairo_surface_t *screen, *layer;
+    GError *err = NULL;
+    EXPECT(project_stills(path, 640, &screen, &layer, &err), "stills of %s: %s", path, err ? err->message : "?");
+    guint32 s = surface_pixel(screen, CX, CY), in = surface_pixel(layer, CX, CY), out = surface_pixel(layer, 10, 10);
+    EXPECT((s & 0xff) > 200 && (s >> 16 & 0xff) < 60, "the screen still shows the screen (%08x)", s);
+    EXPECT(in >> 24 == 255 && (in >> 16 & 0xff) > 200, "the layer still has the opaque camera (%08x)", in);
+    EXPECT(out >> 24 == 0, "the layer still is transparent elsewhere (%08x)", out);
+    cairo_surface_destroy(screen);
+    cairo_surface_destroy(layer);
+}
+
+static char *ExportResult, *ExportError;
+static void export_done(const char *path, void *ud) { (void)ud; ExportResult = g_strdup(path); g_main_loop_quit(Loop); }
+static void export_fail(const char *msg, void *ud) { (void)ud; ExportError = g_strdup(msg); g_main_loop_quit(Loop); }
+static void export_progress(double fraction, void *ud) { (void)fraction; (void)ud; }
+
+/* Exports the project at final transparency t into info->container. */
+static char *export_project(const project_info *info, double t, const char *dir) {
+    GError *err = NULL;
+    ExportResult = ExportError = NULL;
+    exporter *e = export_start(ProjectPath, info, later_alpha(t, info->t_a), dir,
+                               (export_callbacks){export_progress, export_done, export_fail, NULL}, &err);
+    EXPECT(e, "export did not start: %s", err ? err->message : "?");
+    g_main_loop_run(Loop);
+    EXPECT(!ExportError, "export failed: %s", ExportError);
+    char *part = g_strconcat(ExportResult, ".part", NULL);
+    EXPECT(!g_file_test(part, G_FILE_TEST_EXISTS), "the temporary .part name is gone");
+    g_free(part);
+    return ExportResult;
 }
 
 int main(int argc, char **argv) {
@@ -279,12 +340,66 @@ int main(int argc, char **argv) {
     EXPECT(project_read_info(KilledPath, &back) && back.t_a == 0.5,
            "a killed project keeps its settings (they are in the MKV header)");
 
+    EXPECT(export_available(), "FFV1 and the H.264 decoder are installed (gst-libav)");
+    check_stills(ProjectPath);
+    check_stills(KilledPath);   /* Its duration is a guess: the first frame is used. */
+
+    /* t = 0: the opaque camera; t = T_A: the screen alone; halfway: an even mix. */
+    guint8 rgb[3];
+    char *movie = export_project(&project, 0, dir);
+    pixel_at(movie, 45, CX, CY, rgb);
+    EXPECT(rgb[0] > 200 && rgb[1] < 60 && rgb[2] < 60, "t = 0 shows the opaque camera (%u %u %u)", rgb[0], rgb[1], rgb[2]);
+    g_unlink(movie);
+    g_free(movie);
+    movie = export_project(&project, project.t_a, dir);
+    pixel_at(movie, 45, CX, CY, rgb);
+    EXPECT(rgb[0] < 60 && rgb[1] < 60 && rgb[2] > 200, "t = T_A shows only the screen (%u %u %u)", rgb[0], rgb[1], rgb[2]);
+    g_unlink(movie);
+    g_free(movie);
+    movie = export_project(&project, project.t_a / 2, dir);
+    pixel_at(movie, 45, CX, CY, rgb);
+    EXPECT(abs(rgb[0] - 128) < MIX_TOLERANCE && abs(rgb[2] - 128) < MIX_TOLERANCE && rgb[1] < 60,
+           "t = T_A / 2 mixes camera and screen evenly (%u %u %u)", rgb[0], rgb[1], rgb[2]);
+    g_unlink(movie);
+    g_free(movie);
+
+    /* Every container, the audio copied, the length kept. */
+    for (int i = 0; i < CONTAINER_COUNT; i++) {
+        project_info as = project;
+        g_strlcpy(as.container, Containers[i].ext, sizeof(as.container));
+        movie = export_project(&as, project.t_a / 2, dir);
+        EXPECT(g_str_has_suffix(movie, Containers[i].ext), "%s export has its extension", Containers[i].label);
+        info = discover(movie);
+        double d = (double)gst_discoverer_info_get_duration(info) / GST_SECOND;
+        videos = gst_discoverer_info_get_video_streams(info);
+        audios = gst_discoverer_info_get_audio_streams(info);
+        EXPECT(videos && audios, "%s export holds video and the copied audio", Containers[i].label);
+        EXPECT(fabs(d - project_s) < 0.5, "%s export lasts as long as the project (%.2fs, %.2fs)",
+               Containers[i].label, d, project_s);
+        gst_discoverer_stream_info_list_free(videos);
+        gst_discoverer_stream_info_list_free(audios);
+        gst_discoverer_info_unref(info);
+        g_unlink(movie);
+        g_free(movie);
+    }
+
+    /* A failed export keeps the project. */
+    GError *bad_err = NULL;
+    ExportResult = ExportError = NULL;
+    exporter *bad = export_start(ProjectPath, &project, 1, "/nonexistent-youcam-dir",
+                                 (export_callbacks){export_progress, export_done, export_fail, NULL}, &bad_err);
+    if (bad) g_main_loop_run(Loop);
+    EXPECT(!bad || ExportError, "an unwritable folder fails the export");
+    EXPECT(g_file_test(ProjectPath, G_FILE_TEST_EXISTS), "a failed export keeps the project");
+    g_clear_error(&bad_err);
+
     g_unlink(ProjectPath);
     g_unlink(KilledPath);
     g_rmdir(dir);
     printf("media ok: %.2fs 640x360 .mov with audio, pause removed; silent movie has no audio track; "
            "camera layer movie %.2fs with %d composited frames; mp4, mkv and avi ok; "
-           "project %.2fs with screen, FFV1 layer and audio, settings read back after a finish and a kill\n",
+           "project %.2fs with screen, FFV1 layer and audio, settings read back after a finish and a kill; "
+           "stills ok; exports at t = 0, T_A/2 and T_A ok, to MOV, MP4, MKV and AVI with audio\n",
            duration, layered, composited, project_s);
     return 0;
 }

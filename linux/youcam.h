@@ -321,6 +321,22 @@ char *project_latest(const char *dir);         /* Newest *.youcam.mkv, NULL if n
 void project_clean_parts(const char *dir);
 char *export_output_path(const char *dir, const char *project, const char *ext);
 
+int export_available(void);   /* avenc_ffv1, avdec_ffv1 and avdec_h264 are installed (gst-libav). */
+/* Two stills from the middle of the project (the first frame of a short or
+ * killed one): the screen (RGB24) and the camera layer (ARGB32), 'width' wide. */
+int project_stills(const char *path, int width, cairo_surface_t **screen, cairo_surface_t **layer, GError **err);
+
+typedef struct exporter exporter;
+typedef struct {
+    void (*progress)(double fraction, void *ud);     /* 0...1, polled every 200 ms. */
+    void (*finished)(const char *path, void *ud);    /* The movie, renamed from .part. */
+    void (*failed)(const char *message, void *ud);   /* .part deleted, the project untouched. */
+    void *ud;
+} export_callbacks;
+exporter *export_start(const char *project, const project_info *info, double alpha, const char *out_dir,
+                       export_callbacks cb, GError **err);
+void export_cancel(exporter *e);   /* No callback follows; .part deleted. */
+
 /* ------------------------------------------------------------ portal.c --- */
 
 void portal_register_app(void);

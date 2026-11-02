@@ -14,7 +14,12 @@
  * The settings travel in the MKV header (the WritingApp field), on disk
  * from the first second: GStreamer writes tags only when the file is
  * finished, so a killed recording would lose them. A copy goes into the
- * COMMENT tag for players and ffprobe. */
+ * COMMENT tag for players and ffprobe.
+ *
+ * The dialog's preview comes from two stills of the same frame, decoded by
+ * project_stills(); the export decodes both tracks, composites them, and
+ * encodes with the recorder's own encoder chain (video_encoder_chain()) into
+ * the container chosen when the recording started; the AAC is copied. */
 
 #include <math.h>
 #include <stdio.h>
@@ -29,6 +34,15 @@
 #define KEY_CONTAINER ";YOUCAM_CONTAINER="
 #define KEY_AUDIO ";YOUCAM_AUDIO="
 #define EXT_CHARS "abcdefghijklmnopqrstuvwxyz0123456789"
+#define PROGRESS_MS 200
+#define STILL_TIMEOUT_S 5
+/* The screen and the layer wait for each other at the compositor: queues
+ * bounded by time only, since an FFV1 frame can be megabytes. */
+#define TRACK_QUEUE "queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000"
+/* output-corrupt=false: a damaged GOP is skipped instead of shown gray. */
+#define SCREEN_DECODE "h264parse ! avdec_h264 output-corrupt=false ! videoconvert"
+#define SCREEN_STILL "d.video_0 ! queue ! " SCREEN_DECODE " ! video/x-raw,format=BGRx"
+#define LAYER_STILL "d.video_1 ! queue ! avdec_ffv1 ! videoconvert ! video/x-raw,format=BGRA"
 
 double later_max(double t_a) {
     return isfinite(t_a) && t_a > 0 ? fmin(t_a, TRANSPARENCY_MAX) : 0;
@@ -173,4 +187,225 @@ char *export_output_path(const char *dir, const char *project, const char *ext) 
     }
     g_free(name);
     return path;
+}
+
+static int has_factory(const char *name) {
+    GstElementFactory *f = gst_element_factory_find(name);
+    int found = f != NULL;
+    if (f) gst_object_unref(f);
+    return found;
+}
+
+/* The layer codec and the screen decoder come with gst-libav. Checked once. */
+int export_available(void) {
+    static int known, available;
+    if (!known) {
+        available = has_factory("avenc_ffv1") && has_factory("avdec_ffv1") && has_factory("avdec_h264");
+        known = 1;
+    }
+    return available;
+}
+
+/* Prerolls one track of a project at 'at' (at < 0: the middle) with an
+ * accurate seek. One pipeline per track, the others left unlinked: with
+ * both video tracks linked the demuxer seeks by the FFV1 index and starts
+ * the H.264 mid-GOP (a gray picture). */
+static GstSample *still_at(const char *path, const char *track, gint64 at) {
+    char *desc = g_strdup_printf("filesrc name=src ! matroskademux name=d %s ! appsink name=sink", track);
+    GstElement *p = gst_parse_launch(desc, NULL);
+    g_free(desc);
+    if (!p) return NULL;
+    GstElement *src = gst_bin_get_by_name(GST_BIN(p), "src"), *sink = gst_bin_get_by_name(GST_BIN(p), "sink");
+    g_object_set(src, "location", path, NULL);
+    GstSample *sample = NULL;
+    gint64 duration = 0;
+    if (gst_element_set_state(p, GST_STATE_PAUSED) != GST_STATE_CHANGE_FAILURE &&
+        gst_element_get_state(p, NULL, NULL, STILL_TIMEOUT_S * GST_SECOND) == GST_STATE_CHANGE_SUCCESS) {
+        if (at < 0) at = gst_element_query_duration(p, GST_FORMAT_TIME, &duration) && duration > 0 ? duration / 2 : 0;
+        if (gst_element_seek_simple(p, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_ACCURATE, at) &&
+            gst_element_get_state(p, NULL, NULL, STILL_TIMEOUT_S * GST_SECOND) == GST_STATE_CHANGE_SUCCESS)
+            g_signal_emit_by_name(sink, "try-pull-preroll", (GstClockTime)(STILL_TIMEOUT_S * GST_SECOND), &sample);
+    }
+    gst_element_set_state(p, GST_STATE_NULL);
+    gst_object_unref(src);
+    gst_object_unref(sink);
+    gst_object_unref(p);
+    return sample;
+}
+
+/* A decoded BGRx/BGRA frame (rows packed, 4 bytes per pixel: cairo's own
+ * layout on little-endian) as a cairo surface scaled to 'width'. */
+static cairo_surface_t *sample_surface(GstSample *sample, cairo_format_t format, int width) {
+    int w = 0, h = 0;
+    GstStructure *s = gst_caps_get_structure(gst_sample_get_caps(sample), 0);
+    gst_structure_get_int(s, "width", &w);
+    gst_structure_get_int(s, "height", &h);
+    GstBuffer *buf = gst_sample_get_buffer(sample);
+    GstMapInfo map;
+    if (w <= 0 || h <= 0 || !gst_buffer_map(buf, &map, GST_MAP_READ)) return NULL;
+    if (map.size < (gsize)w * h * 4) {
+        gst_buffer_unmap(buf, &map);
+        return NULL;
+    }
+    cairo_surface_t *full = cairo_image_surface_create(format, w, h);
+    int stride = cairo_image_surface_get_stride(full);
+    guint8 *dst = cairo_image_surface_get_data(full);
+    for (int row = 0; row < h; row++)
+        memcpy(dst + (size_t)row * stride, map.data + (size_t)row * w * 4, (size_t)w * 4);
+    gst_buffer_unmap(buf, &map);
+    cairo_surface_mark_dirty(full);
+    int height = MAX(1, (int)lround((double)h * width / w));
+    cairo_surface_t *out = cairo_image_surface_create(format, width, height);
+    cairo_t *cr = cairo_create(out);
+    cairo_scale(cr, (double)width / w, (double)height / h);
+    cairo_set_source_surface(cr, full, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    cairo_surface_destroy(full);
+    return out;
+}
+
+/* The screen at the middle, then the layer at that very frame's time. */
+int project_stills(const char *path, int width, cairo_surface_t **screen, cairo_surface_t **layer, GError **err) {
+    *screen = *layer = NULL;
+    GstSample *a = still_at(path, SCREEN_STILL, -1);
+    if (!a) a = still_at(path, SCREEN_STILL, 0);   /* Short, or killed: its duration is only a guess. */
+    GstClockTime at = a ? GST_BUFFER_PTS(gst_sample_get_buffer(a)) : GST_CLOCK_TIME_NONE;
+    GstSample *l = a ? still_at(path, LAYER_STILL, GST_CLOCK_TIME_IS_VALID(at) ? (gint64)at : 0) : NULL;
+    if (a && l) {
+        *screen = sample_surface(a, CAIRO_FORMAT_RGB24, width);
+        *layer = sample_surface(l, CAIRO_FORMAT_ARGB32, width);
+    }
+    if (a) gst_sample_unref(a);
+    if (l) gst_sample_unref(l);
+    if (*screen && *layer) return 1;
+    if (*screen) cairo_surface_destroy(*screen);
+    if (*layer) cairo_surface_destroy(*layer);
+    *screen = *layer = NULL;
+    g_set_error(err, GST_STREAM_ERROR, GST_STREAM_ERROR_DECODE, "The recording cannot be read.");
+    return 0;
+}
+
+struct exporter {
+    GstElement *pipeline, *comp, *demux;
+    char *part, *path;
+    export_callbacks cb;
+    guint poll;
+    gint64 started;
+};
+
+static void export_free(exporter *e) {
+    if (e->poll) g_source_remove(e->poll);
+    GstBus *bus = gst_element_get_bus(e->pipeline);
+    gst_bus_remove_signal_watch(bus);
+    gst_object_unref(bus);
+    gst_element_set_state(e->pipeline, GST_STATE_NULL);   /* File sources only: safe on the main loop. */
+    gst_object_unref(e->comp);
+    gst_object_unref(e->demux);
+    gst_object_unref(e->pipeline);
+    g_free(e->part);
+    g_free(e->path);
+    g_free(e);
+}
+
+/* Position of the compositor's output over the project's duration. A
+ * killed project's duration is a guess, so the bar may lag there. */
+static gboolean export_poll(gpointer data) {
+    exporter *e = data;
+    gint64 pos = 0, dur = 0;
+    if (gst_element_query_position(e->comp, GST_FORMAT_TIME, &pos) &&
+        gst_element_query_duration(e->demux, GST_FORMAT_TIME, &dur) && dur > 0)
+        e->cb.progress(fmin(1, fmax(0, (double)pos / dur)), e->cb.ud);
+    return G_SOURCE_CONTINUE;
+}
+
+static void export_eos(GstBus *bus, GstMessage *msg, gpointer data) {
+    (void)bus; (void)msg;
+    exporter *e = data;
+    char *path = g_strdup(e->path), *part = g_strdup(e->part);
+    double seconds = (g_get_monotonic_time() - e->started) / 1e6;
+    export_callbacks cb = e->cb;
+    export_free(e);
+    if (g_rename(part, path) == 0) {
+        g_print("youcam: exported %s in %.1fs\n", path, seconds);
+        cb.finished(path, cb.ud);
+    } else {
+        g_unlink(part);
+        cb.failed("The movie could not be given its final name.", cb.ud);
+    }
+    g_free(path);
+    g_free(part);
+}
+
+static void export_error(GstBus *bus, GstMessage *msg, gpointer data) {
+    (void)bus;
+    exporter *e = data;
+    GError *err = NULL;
+    char *debug = NULL;
+    gst_message_parse_error(msg, &err, &debug);
+    g_printerr("youcam: export error from %s: %s\n%s\n", GST_OBJECT_NAME(GST_MESSAGE_SRC(msg)),
+               err ? err->message : "?", debug ? debug : "");
+    char *text = g_strdup(err ? err->message : "The movie could not be written.");
+    g_clear_error(&err);
+    g_free(debug);
+    char *part = g_strdup(e->part);
+    export_callbacks cb = e->cb;
+    export_free(e);
+    g_unlink(part);
+    cb.failed(text, cb.ud);
+    g_free(text);
+    g_free(part);
+}
+
+/* As fast as decoding and encoding allow (no live source, no clock). */
+exporter *export_start(const char *project, const project_info *info, double alpha, const char *out_dir,
+                       export_callbacks cb, GError **err) {
+    char *desc = g_strdup_printf(
+        "filesrc name=src ! matroskademux name=d "
+        "d.video_0 ! " TRACK_QUEUE " ! " SCREEN_DECODE " ! video/x-raw,format=BGRA ! " SRGB_LABEL " ! comp.sink_0 "
+        "d.video_1 ! " TRACK_QUEUE " ! avdec_ffv1 ! videoconvert ! video/x-raw,format=BGRA ! " SRGB_LABEL " ! comp.sink_1 "
+        "compositor name=comp background=black ! video/x-raw,format=BGRA,framerate=30/1 ! "
+        "%s ! h264parse ! queue ! mux. %s%s name=mux ! filesink name=file",
+        video_encoder_chain(), info->has_audio ? "d.audio_0 ! " TRACK_QUEUE " ! aacparse ! queue ! mux. " : "",
+        container_for(info->container)->muxer);
+    GstElement *p = gst_parse_launch(desc, err);
+    g_free(desc);
+    if (!p) return NULL;
+    exporter *e = g_new0(exporter, 1);
+    e->pipeline = p;
+    e->cb = cb;
+    e->path = export_output_path(out_dir, project, info->container);
+    e->part = g_strconcat(e->path, ".part", NULL);
+    GstElement *src = gst_bin_get_by_name(GST_BIN(p), "src"), *file = gst_bin_get_by_name(GST_BIN(p), "file");
+    g_object_set(src, "location", project, NULL);
+    g_object_set(file, "location", e->part, NULL);
+    gst_object_unref(src);
+    gst_object_unref(file);
+    e->comp = gst_bin_get_by_name(GST_BIN(p), "comp");
+    e->demux = gst_bin_get_by_name(GST_BIN(p), "d");
+    GstPad *layer = gst_element_get_static_pad(e->comp, "sink_1");
+    g_object_set(layer, "alpha", alpha, "zorder", 1, NULL);   /* Set here: a %f in the description would follow the locale. */
+    gst_object_unref(layer);
+    GstBus *bus = gst_element_get_bus(p);
+    gst_bus_add_signal_watch(bus);
+    g_signal_connect(bus, "message::eos", G_CALLBACK(export_eos), e);
+    g_signal_connect(bus, "message::error", G_CALLBACK(export_error), e);
+    gst_object_unref(bus);
+    e->started = g_get_monotonic_time();
+    if (gst_element_set_state(p, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+        g_set_error(err, GST_CORE_ERROR, GST_CORE_ERROR_STATE_CHANGE, "The export could not start.");
+        export_cancel(e);
+        return NULL;
+    }
+    e->poll = g_timeout_add(PROGRESS_MS, export_poll, e);
+    return e;
+}
+
+void export_cancel(exporter *e) {
+    char *part = g_strdup(e->part);
+    export_free(e);
+    g_unlink(part);
+    g_free(part);
 }
