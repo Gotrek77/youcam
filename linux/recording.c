@@ -164,7 +164,7 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
         : g_strdup_printf("pipewiresrc path=%u do-timestamp=true always-copy=true keepalive-time=1000", node);
     GError *err = NULL;
     audio_monitor("recording", 1);
-    R.movie = writer_start(path, video, mic, R.has_crop ? &R.crop : NULL, 1,
+    R.movie = writer_start(path, video, mic, R.has_crop ? &R.crop : NULL, WRITER_LAYER_COMPOSITE, NULL,
                            (writer_callbacks){movie_finished, movie_failed, NULL}, &err);
     g_free(video);
     g_free(path);

@@ -280,10 +280,23 @@ typedef struct {
     void *ud;
 } writer_callbacks;
 
-writer *writer_start(const char *path, const char *video_source, GstElement *mic,
-                     const rect *crop_fraction, int camera_layer, writer_callbacks cb, GError **err);
+/* NONE: screen only. COMPOSITE: the opaque camera copy laid over the screen
+ * (writer_push_camera). TRACK: Choose After Recording, the layer on its own
+ * lossless track of an MKV project (writer_push_layer). */
+typedef enum { WRITER_LAYER_NONE, WRITER_LAYER_COMPOSITE, WRITER_LAYER_TRACK } writer_layer;
+
+/* The screen arrives as BGRA labelled with varying spellings of sRGB
+ * (0:0:4:1, 0:1:4:1). A differing label makes the compositor run a full
+ * color conversion; relabelling, without touching pixels, keeps it a blend. */
+#define SRGB_LABEL "capssetter join=true caps=video/x-raw,colorimetry=sRGB"
+
+writer *writer_start(const char *path, const char *video_source, GstElement *mic, const rect *crop_fraction,
+                     writer_layer layer, const project_info *project, writer_callbacks cb, GError **err);
 int writer_output_size(writer *w, int *width, int *height);
 const char *video_encoder_name(void);
+const char *video_encoder_chain(void);   /* Encoder, conversion and bitrate, shared with export.c. */
+void writer_push_layer(writer *w, const guint8 *bgra, int stride);   /* Movie-size frame; NULL = transparent. */
+int writer_layer_track(writer *w);
 void writer_push_camera(writer *w, const guint8 *bgra, int width, int height, int stride,
                         int x, int y, int visible);
 void writer_pause(writer *w);

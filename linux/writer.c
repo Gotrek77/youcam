@@ -1,5 +1,7 @@
 /* Movie writer (RecordingWriter.swift): screen + optional microphone into a
- * QuickTime .mov with H.264 video and AAC audio.
+ * QuickTime .mov with H.264 video and AAC audio. Linux adds the other
+ * containers and, for Choose After Recording, an MKV project with the
+ * camera layer on its own FFV1 track (see export.c).
  *
  * Pausing pauses the whole pipeline. GStreamer's running time does not
  * advance while paused, so both tracks continue seamlessly after a resume
@@ -19,6 +21,7 @@ struct writer {
     GstElement *pipeline;
     char *path;
     writer_callbacks cb;
+    writer_layer layer;
     rect crop;
     int has_crop;
     guint timeout;
@@ -91,28 +94,46 @@ static void set_camera_caps(writer *w, int width, int height) {
     w->camera_h = height;
 }
 
-/* Camera layer frame, placed at (x, y) in movie pixels. When not visible
- * the layer is just made transparent; the compositor keeps its last frame. */
-void writer_push_camera(writer *w, const guint8 *bgra, int width, int height, int stride,
-                        int x, int y, int visible) {
-    if (!w->camera || w->done) return;
-    if (!visible) {
-        g_object_set(w->camera_pad, "alpha", 0.0, NULL);
-        return;
-    }
-    if (w->paused_at) return;
+/* Copies a BGRA frame into a buffer for the camera appsrc; NULL pushes a
+ * fully transparent one. The caps follow the frame size. */
+static void push_frame(writer *w, const guint8 *bgra, int width, int height, int stride) {
     if (width != w->camera_w || height != w->camera_h) set_camera_caps(w, width, height);
     GstBuffer *buf = gst_buffer_new_allocate(NULL, (gsize)width * height * 4, NULL);
     GstMapInfo map;
     gst_buffer_map(buf, &map, GST_MAP_WRITE);
-    for (int row = 0; row < height; row++)
+    if (!bgra) memset(map.data, 0, map.size);
+    for (int row = 0; bgra && row < height; row++)
         memcpy(map.data + (size_t)row * width * 4, bgra + (size_t)row * stride, (size_t)width * 4);
     gst_buffer_unmap(buf, &map);
     GstFlowReturn ret;
     g_signal_emit_by_name(w->camera, "push-buffer", buf, &ret);
     gst_buffer_unref(buf);
+}
+
+/* Composite: camera layer frame, placed at (x, y) in movie pixels. When not
+ * visible the layer is just made transparent; the compositor keeps its last frame. */
+void writer_push_camera(writer *w, const guint8 *bgra, int width, int height, int stride,
+                        int x, int y, int visible) {
+    if (!w->camera_pad || w->done) return;
+    if (!visible) {
+        g_object_set(w->camera_pad, "alpha", 0.0, NULL);
+        return;
+    }
+    if (w->paused_at) return;
+    push_frame(w, bgra, width, height, stride);
     g_object_set(w->camera_pad, "xpos", x, "ypos", y, "width", width, "height", height, "alpha", 1.0, NULL);
 }
+
+/* Track: the whole movie-size layer. Its size is pinned by the first frame
+ * (Matroska cannot change caps later), so frames come only once the movie
+ * size is known, at exactly that size. */
+void writer_push_layer(writer *w, const guint8 *bgra, int stride) {
+    int width, height;
+    if (w->layer != WRITER_LAYER_TRACK || w->done || w->paused_at || !writer_output_size(w, &width, &height)) return;
+    push_frame(w, bgra, width, height, stride);
+}
+
+int writer_layer_track(writer *w) { return w->layer == WRITER_LAYER_TRACK; }
 
 /* The portal stream's pixel size is known only once caps arrive. */
 static GstPadProbeReturn crop_probe(GstPad *pad, GstPadProbeInfo *info, gpointer data) {
@@ -243,7 +264,7 @@ const char *video_encoder_name(void) {
     return chosen;
 }
 
-static const char *video_encoder(void) {
+const char *video_encoder_chain(void) {
     const char *name = video_encoder_name();
     for (size_t i = 0; i < G_N_ELEMENTS(Encoders); i++)
         if (strcmp(name, Encoders[i].name) == 0) return Encoders[i].chain;
@@ -268,21 +289,36 @@ static char *noise_reduction_element(int level) {
         "noise-suppression=true noise-suppression-level=%s ! audioconvert ! ", names[level]);
 }
 
-/* The screen arrives as BGRA labelled with varying spellings of sRGB
- * (0:0:4:1, 0:1:4:1). A differing label makes the compositor run a full color
- * conversion; relabelling, without touching pixels, keeps it a plain blend. */
-#define SRGB_LABEL "capssetter join=true caps=video/x-raw,colorimetry=sRGB"
+/* A live pipeline starts on its first data, which may come from the camera
+ * before PipeWire delivers the screen: hold the camera until then. */
+static void hold_camera_until_screen(writer *w, GstPad *screen, GstPad *camera) {
+    gst_pad_add_probe(screen, GST_PAD_PROBE_TYPE_BUFFER, screen_arrived, w, NULL);
+    gst_pad_add_probe(camera, GST_PAD_PROBE_TYPE_BUFFER, drop_until_screen, w, NULL);
+    gst_object_unref(screen);
+    gst_object_unref(camera);
+}
 
-writer *writer_start(const char *path, const char *video_source, GstElement *mic,
-                     const rect *crop_fraction, int camera_layer, writer_callbacks cb, GError **err) {
+/* The settings go into the header (WritingApp), on disk from the start, and
+ * into the COMMENT tag, which the muxer writes only at the end. */
+static void tag_project(GstElement *pipeline, const project_info *project) {
+    char text[PROJECT_INFO_MAX];
+    if (!project || !project_info_format(project, text, sizeof(text))) return;
+    GstElement *mux = gst_bin_get_by_name(GST_BIN(pipeline), "mux");
+    g_object_set(mux, "writing-app", text, NULL);
+    gst_tag_setter_add_tags(GST_TAG_SETTER(mux), GST_TAG_MERGE_REPLACE, GST_TAG_COMMENT, text, NULL);
+    gst_object_unref(mux);
+}
+
+writer *writer_start(const char *path, const char *video_source, GstElement *mic, const rect *crop_fraction,
+                     writer_layer layer, const project_info *project, writer_callbacks cb, GError **err) {
     char *denoise = noise_reduction_element(Prefs.noise_reduction);
     char *audio = mic ? g_strdup_printf(
         "audioconvert name=aconvert ! audioresample ! %s"
         "audio/x-raw,format=F32LE,channels=1,rate=48000 ! identity name=gain ! "
         "audioconvert ! avenc_aac bitrate=%d ! queue ! mux. ", denoise, AUDIO_BITRATE) : g_strdup("");
     g_free(denoise);
-    /* Optional camera layer: an appsrc composited over the screen. */
-    const char *layer = camera_layer
+    /* Composite: the camera layer as an appsrc laid over the screen. */
+    const char *composite = layer == WRITER_LAYER_COMPOSITE
         ? "videoconvert ! video/x-raw,format=BGRA ! " SRGB_LABEL " ! comp.sink_0 "
           "appsrc name=camera is-live=true do-timestamp=true format=time "
           "caps=video/x-raw,format=BGRA,width=2,height=2,framerate=0/1 ! videoconvert ! "
@@ -290,10 +326,21 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
           "compositor name=comp ignore-inactive-pads=true background=black ! "
           "capsfilter name=outsize caps=video/x-raw,framerate=30/1 ! "
         : "";
+    /* Track: the layer at movie size on its own lossless track, linked after
+     * the screen so it is track 2 (export.c relies on it). No caps here: they
+     * come with the first frame. A frame is 16 MB at 2560x1600, so a busy
+     * encoder drops new ones rather than queueing them; the export keeps
+     * showing the last one. */
+    const char *track = layer == WRITER_LAYER_TRACK
+        ? "appsrc name=camera is-live=true do-timestamp=true format=time max-buffers=4 leaky-type=upstream ! "
+          "avenc_ffv1 ! queue ! mux. "
+        : "";
+    const char *ext = strrchr(path, '.') ? strrchr(path, '.') + 1 : NULL;
     char *desc = g_strdup_printf(
         "%s ! videoconvert ! videocrop name=crop ! videorate ! video/x-raw,framerate=30/1 ! %s"
-        "%s ! h264parse ! queue ! mux. %s%s name=mux ! filesink name=file",
-        video_source, layer, video_encoder(), audio, container_for(strrchr(path, '.') ? strrchr(path, '.') + 1 : NULL)->muxer);
+        "%s ! h264parse ! queue ! mux. %s%s%s name=mux ! filesink name=file",
+        video_source, composite, video_encoder_chain(), track, audio,
+        layer == WRITER_LAYER_TRACK ? "matroskamux" : container_for(ext)->muxer);
     GstElement *p = gst_parse_launch(desc, err);
     g_free(desc);
     g_free(audio);
@@ -318,12 +365,18 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
     w->pipeline = p;
     w->path = g_strdup(path);
     w->cb = cb;
+    w->layer = layer;
     GstElement *file = gst_bin_get_by_name(GST_BIN(p), "file");
     g_object_set(file, "location", path, NULL);
     gst_object_unref(file);
     GstElement *crop = gst_bin_get_by_name(GST_BIN(p), "crop");
     GstPad *pad = gst_element_get_static_pad(crop, "src");
     gst_pad_add_probe(pad, GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM, size_probe, w, NULL);
+    if (layer != WRITER_LAYER_NONE) w->camera = gst_bin_get_by_name(GST_BIN(p), "camera");
+    if (layer == WRITER_LAYER_TRACK) {
+        hold_camera_until_screen(w, gst_object_ref(pad), gst_element_get_static_pad(w->camera, "src"));
+        tag_project(p, project);
+    }
     gst_object_unref(pad);
     if (crop_fraction) {
         w->crop = *crop_fraction;
@@ -332,17 +385,12 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
         gst_object_unref(pad);
     }
     gst_object_unref(crop);
-    if (camera_layer) {
-        w->camera = gst_bin_get_by_name(GST_BIN(p), "camera");
+    if (layer == WRITER_LAYER_COMPOSITE) {
         GstElement *comp = gst_bin_get_by_name(GST_BIN(p), "comp");
         w->camera_pad = gst_element_get_static_pad(comp, "sink_1");
         w->outsize = gst_bin_get_by_name(GST_BIN(p), "outsize");
-        GstPad *screen = gst_element_get_static_pad(comp, "sink_0");
-        gst_pad_add_probe(screen, GST_PAD_PROBE_TYPE_BUFFER, screen_arrived, w, NULL);
-        gst_object_unref(screen);
-        GstPad *out = gst_element_get_static_pad(w->outsize, "src");
-        gst_pad_add_probe(out, GST_PAD_PROBE_TYPE_BUFFER, drop_until_screen, w, NULL);
-        gst_object_unref(out);
+        hold_camera_until_screen(w, gst_element_get_static_pad(comp, "sink_0"),
+                                 gst_element_get_static_pad(w->outsize, "src"));
         gst_object_unref(comp);
         g_object_set(w->camera_pad, "alpha", 0.0, "zorder", 1, NULL);
         w->camera_w = w->camera_h = 2;
