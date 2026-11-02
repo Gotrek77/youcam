@@ -330,9 +330,10 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
      * the screen so it is track 2 (export.c relies on it). No caps here: they
      * come with the first frame. A frame is 16 MB at 2560x1600, so a busy
      * encoder drops new ones rather than queueing them; the export keeps
-     * showing the last one. */
+     * showing the last one. max-bytes=0: its default (200000) is below one
+     * frame and would make the queue "full" after a single buffer. */
     const char *track = layer == WRITER_LAYER_TRACK
-        ? "appsrc name=camera is-live=true do-timestamp=true format=time max-buffers=4 leaky-type=upstream ! "
+        ? "appsrc name=camera is-live=true do-timestamp=true format=time max-buffers=4 max-bytes=0 leaky-type=upstream ! "
           "avenc_ffv1 ! queue ! mux. "
         : "";
     const char *ext = strrchr(path, '.') ? strrchr(path, '.') + 1 : NULL;
