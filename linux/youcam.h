@@ -370,6 +370,8 @@ void recording_start(GdkMonitor *monitor, const rect *local);
 void recording_toggle_pause(void);
 void recording_stop(void);
 void recording_fail(const char *message);
+void recording_set_project_handlers(void (*on_project)(const char *path), void (*on_notice)(const char *message));
+int recording_transparency_locked(void);
 writer *recording_layer_target(rect *monitor, rect *region);
 
 /* ----------------------------------------------------------- overlay.c --- */
@@ -378,6 +380,7 @@ GtkWidget *overlay_create(void);
 void overlay_apply_shape(void);
 void overlay_queue_draw(void);
 void overlay_animate(void);
+void overlay_set_capture_hidden(int hidden);
 
 /* ------------------------------------------------------------- panel.c --- */
 

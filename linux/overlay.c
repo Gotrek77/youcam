@@ -81,6 +81,15 @@ void overlay_animate(void) {
     if (Win && !AnimationTick) AnimationTick = gtk_widget_add_tick_callback(Win, animation_tick, NULL, NULL);
 }
 
+/* Choose After Recording with the Capture Exclusion extension: the camera
+ * stays on screen but out of the screen track, so its transparency can be
+ * anything later. The extension hides windows whose title starts with
+ * CAPTURE_HIDDEN_ROLE and follows title changes (notify::title); the role
+ * cannot change once the window is mapped. */
+void overlay_set_capture_hidden(int hidden) {
+    if (Win) gtk_window_set_title(GTK_WINDOW(Win), hidden ? CAPTURE_HIDDEN_ROLE " YouCam" : "YouCam");
+}
+
 static void draw_text(cairo_t *cr, const char *text, const char *font, double alpha,
                       double x, double y, double width, int max_lines) {
     PangoLayout *layout = pango_cairo_create_layout(cr);

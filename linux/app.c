@@ -243,6 +243,27 @@ static void recording_error(const char *message) {
     app_show_message("Recording stopped", message, GTK_MESSAGE_WARNING);
 }
 
+/* A Choose After Recording movie stopped: the dialog finishes it. When
+ * quitting it waits for "Adjust Last Recording Transparency…". */
+static void project_ready(const char *path) {
+    if (App.quitting || App.smoke || g_getenv("YOUCAM_NO_DIALOGS")) return;   /* recording.c printed the path. */
+    later_dialog_open(path);
+}
+
+/* The recording goes on, opaque: say why without blocking, and keep the
+ * message out of the recording when the extension is active. */
+static void recording_notice(const char *message) {
+    if (App.quitting || App.smoke || g_getenv("YOUCAM_NO_DIALOGS")) return;   /* recording.c logged it. */
+    GtkWidget *d = gtk_message_dialog_new(NULL, 0, GTK_MESSAGE_INFO, GTK_BUTTONS_NONE, "%s",
+                                          "Recording with an opaque camera");
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(d), "%s", message);
+    gtk_dialog_add_button(GTK_DIALOG(d), "OK", GTK_RESPONSE_OK);
+    gtk_window_set_role(GTK_WINDOW(d), CAPTURE_HIDDEN_ROLE);
+    gtk_window_set_keep_above(GTK_WINDOW(d), TRUE);
+    g_signal_connect(d, "response", G_CALLBACK(gtk_widget_destroy), NULL);
+    gtk_widget_show(d);
+}
+
 static void microphone_lost(void) {
     recording_fail("The microphone was disconnected. The recording has been stopped to preserve your movie.");
 }
@@ -464,8 +485,40 @@ static void decrease_size(void) { app_resize(window_frame().w / SIZE_STEP); }
 static guint8 *LayerPixels;
 static size_t LayerSize;
 
-/* While recording, keep the opaque camera copy in the movie in step with
- * the window: position, size, shape, mirroring and the latest frame. */
+static void ensure_layer_pixels(size_t size) {
+    if (size <= LayerSize) return;
+    LayerPixels = g_realloc(LayerPixels, size);
+    LayerSize = size;
+}
+
+/* Choose After Recording: the layer is the whole movie, transparent except
+ * for the opaque camera where its window is, and wholly transparent while
+ * the camera is hidden or stopped. It runs for the whole recording. */
+static void push_project_layer(writer *w, rect monitor, rect region) {
+    int out_w, out_h;
+    const camera_frame *f = camera_current_frame();
+    if (!writer_output_size(w, &out_w, &out_h)) return;
+    if (!f || !App.visible || camera_state() != CAMERA_RUNNING) {
+        writer_push_layer(w, NULL, 0);
+        return;
+    }
+    int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, out_w);
+    ensure_layer_pixels((size_t)stride * out_h);
+    cairo_surface_t *s = cairo_image_surface_create_for_data(LayerPixels, CAIRO_FORMAT_ARGB32, out_w, out_h, stride);
+    cairo_t *cr = cairo_create(s);
+    camera_layer l = camera_layer_map(window_frame(), monitor, region, out_w, out_h, Prefs.shape);
+    camera_layer_draw(cr, l, 0, 0, f, Prefs.mirrored,
+                      center_stage_now(l.frame.w, l.frame.h, Prefs.shape, Prefs.mirrored), background_now(f));
+    cairo_destroy(cr);
+    cairo_surface_flush(s);
+    cairo_surface_destroy(s);
+    writer_push_layer(w, LayerPixels, stride);
+}
+
+/* While recording, keep the camera copy in the movie in step with the
+ * window: position, size, shape, mirroring and the latest frame. Opaque
+ * camera over a translucent preview, or the project layer (Choose After
+ * Recording). */
 static gboolean layer_tick(gpointer data) {
     (void)data;
     rect monitor, region;
@@ -473,6 +526,10 @@ static gboolean layer_tick(gpointer data) {
     if (!w) {
         LayerTimer = 0;
         return G_SOURCE_REMOVE;
+    }
+    if (writer_layer_track(w)) {
+        push_project_layer(w, monitor, region);
+        return G_SOURCE_CONTINUE;
     }
     int out_w, out_h, x, y, cw, ch;
     const camera_frame *f = camera_current_frame();
@@ -488,11 +545,7 @@ static gboolean layer_tick(gpointer data) {
         return G_SOURCE_CONTINUE;
     }
     int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, cw);
-    size_t size = (size_t)stride * ch;
-    if (size > LayerSize) {
-        LayerPixels = g_realloc(LayerPixels, size);
-        LayerSize = size;
-    }
+    ensure_layer_pixels((size_t)stride * ch);
     cairo_surface_t *s = cairo_image_surface_create_for_data(LayerPixels, CAIRO_FORMAT_ARGB32, cw, ch, stride);
     cairo_t *cr = cairo_create(s);
     camera_layer_draw(cr, l, x, y, f, Prefs.mirrored,
@@ -862,6 +915,10 @@ void app_startup(GtkApplication *gapp, int smoke) {
     background_apply_prefs();
     audio_init(audio_changed, microphone_lost);
     recording_init(update_ui, recording_error);
+    recording_set_project_handlers(project_ready, recording_notice);
+    char *pending = project_dir();   /* Stale exports' .part files, never the Desktop. */
+    project_clean_parts(pending);
+    g_free(pending);
     App.cam = overlay_create();
     set_camera_frame(restored_frame());
     gtk_widget_set_opacity(App.cam, 1 - Prefs.transparency);

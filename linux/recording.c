@@ -12,12 +12,16 @@
 #include "youcam.h"
 
 #define TICK_MS 250
+#define LATER_UNAVAILABLE "Choose After Recording needs the FFV1 codec of gst-libav. " \
+                          "This recording keeps the camera opaque."
+#define LATER_FAILED "The camera could not be recorded on its own track. This recording keeps the camera opaque."
 
 static struct {
     recording_phase phase;
     writer *movie;
     char *session;
     int mutter;               /* The session is Mutter's (capture exclusion), not the portal's. */
+    int later;                /* A project: the camera transparency is chosen after recording. */
     char *monitor;            /* Name of the monitor being recorded. */
     rect monitor_geometry;
     rect crop;
@@ -31,9 +35,23 @@ static struct {
     char status[128];
     void (*on_change)(void);
     void (*on_error)(const char *);
+    void (*on_project)(const char *path);
+    void (*on_notice)(const char *message);
 } R;
 
 static void changed(void) { if (R.on_change) R.on_change(); }
+
+/* Not a failure: the recording goes on, the user should know why. */
+static void notice(const char *message) {
+    g_printerr("youcam: %s\n", message);
+    if (R.on_notice) R.on_notice(message);
+}
+
+static void leave_later(const char *why) {
+    if (R.mutter) overlay_set_capture_hidden(0);
+    R.later = 0;
+    notice(why);
+}
 
 recording_phase recording_phase_now(void) { return R.phase; }
 const char *recording_last_path(void) { return R.last_path; }
@@ -79,6 +97,8 @@ static void complete_stop(void) {
     R.timer = 0;
     close_session();
     R.movie = NULL;
+    if (R.later && R.mutter) overlay_set_capture_hidden(0);
+    R.later = 0;
     R.phase = PHASE_IDLE;
     audio_monitor("recording", 0);
     changed();
@@ -92,16 +112,20 @@ static void report(const char *message) {
 
 static void movie_finished(const char *path, void *ud) {
     (void)ud;
-    prefs_set_string(&R.last_path, path);
-    g_print("youcam: saved %s\n", path);
+    /* A project is not a movie yet: the dialog finishes it and sets the last path. */
+    char *project = R.later ? g_strdup(path) : NULL;
+    prefs_set_string(&R.last_path, project ? NULL : path);
+    g_print("youcam: %s %s\n", project ? "project" : "saved", path);
     if (R.pending_error) {
         char *message = R.pending_error;
         R.pending_error = NULL;
         report(message);
         g_free(message);
-        return;
+    } else {
+        complete_stop();
     }
-    complete_stop();
+    if (project && R.on_project) R.on_project(project);
+    g_free(project);
 }
 
 static void movie_failed(const char *message, void *ud) {
@@ -114,6 +138,31 @@ static void movie_failed(const char *message, void *ud) {
 const char *recording_output_dir(void) {
     const char *desktop = g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP);
     return desktop && g_file_test(desktop, G_FILE_TEST_IS_DIR) ? desktop : g_get_home_dir();
+}
+
+/* A project when Choose After Recording is on; if its layer track cannot
+ * start, an opaque movie as before: a recording is never lost to it. */
+static writer *start_movie(const char *video, GstElement *mic, GError **err) {
+    writer_callbacks cb = {movie_finished, movie_failed, NULL};
+    const rect *crop = R.has_crop ? &R.crop : NULL;
+    if (R.later) {
+        double p = transparency_normalize(Prefs.transparency);
+        project_info project = {R.mutter ? 1 : p, p, "", mic != NULL};
+        g_strlcpy(project.container, container_for(Prefs.container)->ext, sizeof(project.container));
+        char *dir = project_dir();
+        char *path = g_mkdir_with_parents(dir, 0700) == 0 ? project_new_path(dir, time(NULL)) : NULL;
+        writer *w = path ? writer_start(path, video, mic, crop, WRITER_LAYER_TRACK, &project, cb, err) : NULL;
+        g_free(path);
+        g_free(dir);
+        if (w) return w;
+        g_printerr("youcam: project recording failed: %s\n", err && *err ? (*err)->message : "no pending folder");
+        g_clear_error(err);
+        leave_later(LATER_FAILED);
+    }
+    char *path = recording_next_path(recording_output_dir(), time(NULL), Prefs.container);
+    writer *w = writer_start(path, video, mic, crop, WRITER_LAYER_COMPOSITE, NULL, cb, err);
+    g_free(path);
+    return w;
 }
 
 static void begin(void);
@@ -164,18 +213,18 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
             return;
         }
     }
-    char *path = recording_next_path(recording_output_dir(), time(NULL), Prefs.container);
     char *video = fd >= 0
         ? g_strdup_printf("pipewiresrc fd=%d path=%u do-timestamp=true always-copy=true keepalive-time=1000", fd, node)
         : g_strdup_printf("pipewiresrc path=%u do-timestamp=true always-copy=true keepalive-time=1000", node);
     GError *err = NULL;
     audio_monitor("recording", 1);
-    R.movie = writer_start(path, video, mic, R.has_crop ? &R.crop : NULL, WRITER_LAYER_COMPOSITE, NULL,
-                           (writer_callbacks){movie_finished, movie_failed, NULL}, &err);
+    /* Our own reference: a failed first attempt (start_movie) disposes its
+     * pipeline, the microphone inside included, and the second needs it. */
+    if (mic) gst_object_ref_sink(mic);
+    R.movie = start_movie(video, mic, &err);
+    if (mic) gst_object_unref(mic);
     g_free(video);
-    g_free(path);
     if (!R.movie) {
-        if (mic) gst_object_unref(mic);
         close_fd(fd);
         char *msg = g_strdup(err ? err->message : "The recording could not start.");
         g_clear_error(&err);
@@ -190,6 +239,9 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
 
 static void begin(void) {
     R.mutter = mutter_cast_available();
+    /* With the extension the camera stays on screen but out of the screen
+     * track: any transparency can be chosen later (T_A = 1). */
+    if (R.later && R.mutter) overlay_set_capture_hidden(1);
     if (R.mutter) mutter_cast_start(R.monitor, screen_ready, screen_failed, NULL);
     else portal_screencast_start(Prefs.restore_token, screen_ready, screen_failed, NULL);
 }
@@ -199,6 +251,11 @@ void recording_start(GdkMonitor *monitor, const rect *local) {
     R.phase = PHASE_STARTING;
     R.cancel_start = 0;
     R.retried = 0;
+    R.later = Prefs.saved_transparency == SAVED_LATER;
+    if (R.later && !export_available()) {
+        R.later = 0;
+        notice(LATER_UNAVAILABLE);
+    }
     prefs_set_string(&R.last_error, NULL);
     prefs_set_string(&R.monitor, monitor_name(monitor));
     R.monitor_geometry = monitor_rect(monitor);
@@ -230,6 +287,9 @@ void recording_stop(void) {
         return;
     }
     if (R.phase != PHASE_RECORDING && R.phase != PHASE_PAUSED) return;
+    if (R.later && R.mutter != mutter_cast_available())
+        g_printerr("youcam: the Capture Exclusion extension changed during the recording; "
+                   "the project keeps the state it had at the start\n");
     R.phase = PHASE_FINISHING;
     if (R.timer) g_source_remove(R.timer);
     R.timer = 0;
@@ -261,3 +321,12 @@ void recording_init(void (*on_change)(void), void (*on_error)(const char *)) {
     R.on_change = on_change;
     R.on_error = on_error;
 }
+
+void recording_set_project_handlers(void (*on_project)(const char *path), void (*on_notice)(const char *message)) {
+    R.on_project = on_project;
+    R.on_notice = on_notice;
+}
+
+/* Without the extension the screen track holds the translucent preview:
+ * the export needs it to stay at the T_A recorded at the start. */
+int recording_transparency_locked(void) { return R.later && !R.mutter && PHASE_BUSY(R.phase); }
