@@ -317,7 +317,7 @@ int project_info_parse(const guint8 *bytes, size_t len, project_info *out);   /*
 int project_read_info(const char *path, project_info *out);
 char *project_dir(void);                       /* ~/.local/share/youcam/pending, not created. */
 char *project_new_path(const char *dir, time_t when);
-char *project_latest(const char *dir);         /* Newest *.youcam.mkv, NULL if none. */
+char *project_latest(const char *dir, const char *exclude);   /* Newest *.youcam.mkv but exclude, NULL if none. */
 void project_clean_parts(const char *dir);
 char *export_output_path(const char *dir, const char *project, const char *ext);
 
@@ -332,7 +332,7 @@ typedef struct {
     void (*finished)(const char *path, void *ud);    /* The movie, renamed from .part. */
     void (*failed)(const char *message, void *ud);   /* .part deleted, the project untouched. */
     void *ud;
-} export_callbacks;
+} export_callbacks;   /* finished and failed run after the exporter is freed: drop the pointer. */
 exporter *export_start(const char *project, const project_info *info, double alpha, const char *out_dir,
                        export_callbacks cb, GError **err);
 void export_cancel(exporter *e);   /* No callback follows; .part deleted. */
@@ -364,6 +364,7 @@ recording_phase recording_phase_now(void);
 const char *recording_status(void);
 const char *recording_last_path(void);
 void recording_set_last_path(const char *path);
+const char *recording_active_project(void);   /* The project being recorded, NULL if none. */
 const char *recording_output_dir(void);   /* The Desktop, else the home folder. */
 const char *recording_target_monitor(void);
 void recording_start(GdkMonitor *monitor, const rect *local);

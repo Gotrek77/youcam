@@ -15,6 +15,7 @@
 #define LATER_UNAVAILABLE "Choose After Recording needs the FFV1 codec of gst-libav. " \
                           "This recording keeps the camera opaque."
 #define LATER_FAILED "The camera could not be recorded on its own track. This recording keeps the camera opaque."
+#define LATER_KEPT "The recording is kept: open it with Adjust Last Recording Transparency…"
 
 static struct {
     recording_phase phase;
@@ -22,6 +23,7 @@ static struct {
     char *session;
     int mutter;               /* The session is Mutter's (capture exclusion), not the portal's. */
     int later;                /* A project: the camera transparency is chosen after recording. */
+    char *project;            /* The project being written, until the recording stops. */
     char *monitor;            /* Name of the monitor being recorded. */
     rect monitor_geometry;
     rect crop;
@@ -47,8 +49,10 @@ static void notice(const char *message) {
     if (R.on_notice) R.on_notice(message);
 }
 
+/* Restored unconditionally: begin() hid the title with the Mutter state of
+ * that attempt, and the retry may have read another one. */
 static void leave_later(const char *why) {
-    if (R.mutter) overlay_set_capture_hidden(0);
+    overlay_set_capture_hidden(0);
     R.later = 0;
     notice(why);
 }
@@ -56,12 +60,18 @@ static void leave_later(const char *why) {
 recording_phase recording_phase_now(void) { return R.phase; }
 const char *recording_last_path(void) { return R.last_path; }
 
-/* A movie finished elsewhere (the Choose After Recording export). */
+/* A movie finished elsewhere (the Choose After Recording export): any
+ * earlier failure is over, the status says "Saved to Desktop". */
 void recording_set_last_path(const char *path) {
     prefs_set_string(&R.last_path, path);
+    prefs_set_string(&R.last_error, NULL);
     changed();
 }
 const char *recording_target_monitor(void) { return R.monitor; }
+
+/* The menu and the dialog must never offer this file: Discard would delete
+ * it mid-recording, Save would export half a movie. */
+const char *recording_active_project(void) { return R.project; }
 
 const char *recording_status(void) {
     char t[16];
@@ -97,8 +107,9 @@ static void complete_stop(void) {
     R.timer = 0;
     close_session();
     R.movie = NULL;
-    if (R.later && R.mutter) overlay_set_capture_hidden(0);
+    if (R.later) overlay_set_capture_hidden(0);
     R.later = 0;
+    prefs_set_string(&R.project, NULL);
     R.phase = PHASE_IDLE;
     audio_monitor("recording", 0);
     changed();
@@ -128,11 +139,14 @@ static void movie_finished(const char *path, void *ud) {
     g_free(project);
 }
 
+/* The writer leaves a failed project in pending/: say where it went. */
 static void movie_failed(const char *message, void *ud) {
     (void)ud;
     g_free(R.pending_error);
     R.pending_error = NULL;
-    report(message);
+    char *text = R.later ? g_strdup_printf("%s\n" LATER_KEPT, message) : g_strdup(message);
+    report(text);
+    g_free(text);
 }
 
 const char *recording_output_dir(void) {
@@ -152,6 +166,7 @@ static writer *start_movie(const char *video, GstElement *mic, GError **err) {
         char *dir = project_dir();
         char *path = g_mkdir_with_parents(dir, 0700) == 0 ? project_new_path(dir, time(NULL)) : NULL;
         writer *w = path ? writer_start(path, video, mic, crop, WRITER_LAYER_TRACK, &project, cb, err) : NULL;
+        if (w) prefs_set_string(&R.project, path);
         g_free(path);
         g_free(dir);
         if (w) return w;
@@ -241,7 +256,7 @@ static void begin(void) {
     R.mutter = mutter_cast_available();
     /* With the extension the camera stays on screen but out of the screen
      * track: any transparency can be chosen later (T_A = 1). */
-    if (R.later && R.mutter) overlay_set_capture_hidden(1);
+    overlay_set_capture_hidden(R.later && R.mutter);   /* The retry may see another Mutter state. */
     if (R.mutter) mutter_cast_start(R.monitor, screen_ready, screen_failed, NULL);
     else portal_screencast_start(Prefs.restore_token, screen_ready, screen_failed, NULL);
 }

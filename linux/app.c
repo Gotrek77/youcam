@@ -580,15 +580,16 @@ static void select_saved_transparency(const char *name) {
     prefs_save();
 }
 
+/* The project being recorded is not the last recording yet: skipped. */
 static void adjust_last_recording(void) {
-    char *dir = project_dir(), *latest = project_latest(dir);
+    char *dir = project_dir(), *latest = project_latest(dir, recording_active_project());
     if (latest) later_dialog_open(latest);
     g_free(latest);
     g_free(dir);
 }
 
 static int has_project(void) {
-    char *dir = project_dir(), *latest = project_latest(dir);
+    char *dir = project_dir(), *latest = project_latest(dir, recording_active_project());
     int found = latest != NULL;
     g_free(latest);
     g_free(dir);

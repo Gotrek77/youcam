@@ -611,16 +611,17 @@ static void test_later(void) {
     struct utimbuf t_old = {1000, 1000}, t_recent = {2000, 2000};
     g_utime(old, &t_old);
     g_utime(recent, &t_recent);
-    char *latest = project_latest(dir);
+    char *latest = project_latest(dir, NULL), *earlier = project_latest(dir, recent);
     EXPECT(latest && strcmp(latest, recent) == 0, "The most recent project is the one opened");
+    EXPECT(earlier && strcmp(earlier, old) == 0, "The project being recorded is skipped, older ones stay reachable");
     project_clean_parts(dir);
     EXPECT(!g_file_test(part, G_FILE_TEST_EXISTS) && g_file_test(old, G_FILE_TEST_EXISTS),
            "Stale .part files go, projects stay");
-    EXPECT(!project_latest("/nonexistent-youcam-pending"), "No pending folder, no project");
+    EXPECT(!project_latest("/nonexistent-youcam-pending", NULL), "No pending folder, no project");
     g_unlink(first); g_unlink(second); g_unlink(old); g_unlink(recent);
     g_rmdir(dir);
     g_free(first); g_free(expected); g_free(second); g_free(third); g_free(fresh); g_free(base);
-    g_free(old); g_free(recent); g_free(part); g_free(latest); g_free(dir);
+    g_free(old); g_free(recent); g_free(part); g_free(latest); g_free(earlier); g_free(dir);
 }
 
 int main(void) {

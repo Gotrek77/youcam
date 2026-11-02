@@ -174,6 +174,11 @@ static void add_preview(GtkWidget *box) {
 }
 
 void later_dialog_open(const char *project) {
+    if (g_strcmp0(project, recording_active_project()) == 0) {
+        /* Still being written: Discard would delete the recording, Save export half of it. */
+        g_printerr("youcam: %s is still being recorded\n", project);
+        return;
+    }
     if (D.win && (D.job || strcmp(D.project, project) == 0)) {
         gtk_window_present(GTK_WINDOW(D.win));   /* While saving, a newer project waits for the menu. */
         return;

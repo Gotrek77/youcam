@@ -21,9 +21,11 @@
  * encodes with the recorder's own encoder chain (video_encoder_chain()) into
  * the container chosen when the recording started; the AAC is copied. */
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 #include <glib/gstdio.h>
 #include "youcam.h"
 
@@ -36,6 +38,7 @@
 #define EXT_CHARS "abcdefghijklmnopqrstuvwxyz0123456789"
 #define PROGRESS_MS 200
 #define STILL_TIMEOUT_S 5
+#define PUBLISH_TRIES 100   /* Names taken between two tries: only a race, never a loop. */
 /* The screen and the layer wait for each other at the compositor: queues
  * bounded by time only, since an FFV1 frame can be megabytes. */
 #define TRACK_QUEUE "queue max-size-buffers=0 max-size-bytes=0 max-size-time=2000000000"
@@ -136,8 +139,9 @@ char *project_new_path(const char *dir, time_t when) {
     return path;
 }
 
-/* The menu opens the newest project; older ones wait, without a list. */
-char *project_latest(const char *dir) {
+/* The menu opens the newest project; older ones wait, without a list.
+ * 'exclude' (may be NULL) is the project being recorded right now. */
+char *project_latest(const char *dir, const char *exclude) {
     GDir *d = g_dir_open(dir, 0, NULL);
     if (!d) return NULL;
     char *best = NULL;
@@ -147,7 +151,7 @@ char *project_latest(const char *dir) {
         if (!g_str_has_suffix(name, PROJECT_SUFFIX)) continue;
         char *path = g_build_filename(dir, name, NULL);
         GStatBuf st;
-        if (g_stat(path, &st) == 0 && (!best || st.st_mtime > best_time)) {
+        if (g_strcmp0(path, exclude) != 0 && g_stat(path, &st) == 0 && (!best || st.st_mtime > best_time)) {
             g_free(best);
             best = path;
             best_time = st.st_mtime;
@@ -290,7 +294,8 @@ int project_stills(const char *path, int width, cairo_surface_t **screen, cairo_
 
 struct exporter {
     GstElement *pipeline, *comp, *demux;
-    char *part, *path;
+    char *part, *path, *out_dir, *project;
+    const char *ext;
     export_callbacks cb;
     guint poll;
     gint64 started;
@@ -307,6 +312,8 @@ static void export_free(exporter *e) {
     gst_object_unref(e->pipeline);
     g_free(e->part);
     g_free(e->path);
+    g_free(e->out_dir);
+    g_free(e->project);
     g_free(e);
 }
 
@@ -321,14 +328,35 @@ static gboolean export_poll(gpointer data) {
     return G_SOURCE_CONTINUE;
 }
 
+/* Gives the .part its final name. rename() would replace a movie the user
+ * saved under that name during the export; link() fails instead, and the
+ * next free name is taken. Folders without hard links (FAT, some network
+ * mounts) fall back to rename(), as before. NULL on failure; caller frees. */
+static char *publish(const char *part, const char *dir, const char *project, const char *ext) {
+    for (int i = 0; i < PUBLISH_TRIES; i++) {
+        char *path = export_output_path(dir, project, ext);
+        if (link(part, path) == 0) {
+            g_unlink(part);
+            return path;
+        }
+        int error = errno;
+        if (error != EEXIST && g_rename(part, path) == 0) return path;
+        g_free(path);
+        if (error != EEXIST) break;
+    }
+    return NULL;
+}
+
 static void export_eos(GstBus *bus, GstMessage *msg, gpointer data) {
     (void)bus; (void)msg;
     exporter *e = data;
-    char *path = g_strdup(e->path), *part = g_strdup(e->part);
+    char *part = g_strdup(e->part), *dir = g_strdup(e->out_dir), *project = g_strdup(e->project);
+    const char *ext = e->ext;
     double seconds = (g_get_monotonic_time() - e->started) / 1e6;
     export_callbacks cb = e->cb;
     export_free(e);
-    if (g_rename(part, path) == 0) {
+    char *path = publish(part, dir, project, ext);
+    if (path) {
         g_print("youcam: exported %s in %.1fs\n", path, seconds);
         cb.finished(path, cb.ud);
     } else {
@@ -337,6 +365,8 @@ static void export_eos(GstBus *bus, GstMessage *msg, gpointer data) {
     }
     g_free(path);
     g_free(part);
+    g_free(dir);
+    g_free(project);
 }
 
 static void export_error(GstBus *bus, GstMessage *msg, gpointer data) {
@@ -370,13 +400,17 @@ exporter *export_start(const char *project, const project_info *info, double alp
         "%s ! h264parse ! queue ! mux. %s%s name=mux ! filesink name=file",
         video_encoder_chain(), info->has_audio ? "d.audio_0 ! " TRACK_QUEUE " ! aacparse ! queue ! mux. " : "",
         container_for(info->container)->muxer);
-    GstElement *p = gst_parse_launch(desc, err);
+    /* Fatal errors: a missing element returns NULL, never a pipeline and an error. */
+    GstElement *p = gst_parse_launch_full(desc, NULL, GST_PARSE_FLAG_FATAL_ERRORS, err);
     g_free(desc);
     if (!p) return NULL;
     exporter *e = g_new0(exporter, 1);
     e->pipeline = p;
     e->cb = cb;
-    e->path = export_output_path(out_dir, project, info->container);
+    e->out_dir = g_strdup(out_dir);
+    e->project = g_strdup(project);
+    e->ext = container_for(info->container)->ext;
+    e->path = export_output_path(out_dir, project, e->ext);
     e->part = g_strconcat(e->path, ".part", NULL);
     GstElement *src = gst_bin_get_by_name(GST_BIN(p), "src"), *file = gst_bin_get_by_name(GST_BIN(p), "file");
     g_object_set(src, "location", project, NULL);

@@ -363,6 +363,26 @@ int main(int argc, char **argv) {
     g_unlink(movie);
     g_free(movie);
 
+    /* A movie saved under the export's name while it runs is never replaced. */
+    char *taken = export_output_path(dir, ProjectPath, project.container);
+    GError *race_err = NULL;
+    ExportResult = ExportError = NULL;
+    exporter *race = export_start(ProjectPath, &project, 1, dir,
+                                  (export_callbacks){export_progress, export_done, export_fail, NULL}, &race_err);
+    EXPECT(race, "export did not start: %s", race_err ? race_err->message : "?");
+    g_file_set_contents(taken, "mine", -1, NULL);
+    g_main_loop_run(Loop);
+    char *kept = NULL;
+    EXPECT(!ExportError && ExportResult && g_str_has_suffix(ExportResult, " (2).mov"),
+           "the export takes the next free name (%s)", ExportResult ? ExportResult : ExportError);
+    EXPECT(g_file_get_contents(taken, &kept, NULL, NULL) && strcmp(kept, "mine") == 0,
+           "the movie that took the name is untouched");
+    g_unlink(taken);
+    g_unlink(ExportResult);
+    g_free(kept);
+    g_free(taken);
+    g_free(ExportResult);
+
     /* Every container, the audio copied, the length kept. */
     for (int i = 0; i < CONTAINER_COUNT; i++) {
         project_info as = project;
@@ -399,7 +419,8 @@ int main(int argc, char **argv) {
     printf("media ok: %.2fs 640x360 .mov with audio, pause removed; silent movie has no audio track; "
            "camera layer movie %.2fs with %d composited frames; mp4, mkv and avi ok; "
            "project %.2fs with screen, FFV1 layer and audio, settings read back after a finish and a kill; "
-           "stills ok; exports at t = 0, T_A/2 and T_A ok, to MOV, MP4, MKV and AVI with audio\n",
+           "stills ok; exports at t = 0, T_A/2 and T_A ok, to MOV, MP4, MKV and AVI with audio; "
+           "a name taken during the export is kept\n",
            duration, layered, composited, project_s);
     return 0;
 }
