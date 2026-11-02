@@ -53,10 +53,19 @@ need. `make uninstall` removes everything `make install` added.
   then x264 in software). `YOUCAM_ENCODER=va|nvenc|x264` forces one.
 - **Transparency** optionally makes the camera see-through so you can see
   what it covers. Adjust the slider from 0% to 80%, or choose **Reset
-  Transparency to 0%** to turn it off. Check **Apply Transparency to Saved
-  Video** to record the same transparency; leave it unchecked to keep the
-  recorded camera opaque. Both choices are remembered, and changes apply
-  immediately, including during recording.
+  Transparency to 0%** to turn it off. **Saved Video** chooses what
+  recordings show: **Same as Preview** (default), **Opaque**, or (Linux
+  only) **Choose After Recording**: when you stop, a window shows a frame of
+  the recording and a slider for the camera transparency of the saved
+  movie; **Save** writes it to the Desktop in the Recording Format,
+  **Later** keeps it for **Adjust Last Recording Transparency…**,
+  **Discard…** deletes it. With the YouCam Capture Exclusion extension any
+  value up to 80% is possible (the camera stays on screen but out of the
+  screen recording); without it, up to the preview transparency used while
+  recording, which then stays fixed until you stop. Unfinished recordings
+  wait in `~/.local/share/youcam/pending/` (playable MKV files, also after
+  a crash). It needs the FFV1 codec from gst-libav. Both choices are
+  remembered, and slider changes apply immediately, including during recording.
 - **Center Stage (Follow Face)** gently pans and zooms the camera to keep
   your face centred, in the preview and in recordings. It is on by default
   and remembered.
@@ -76,6 +85,8 @@ Run checks with `make test` and `make smoke-test`. `./youcam --record-test 6` ma
 recording through the portal or, with the capture exclusion extension active, through Mutter
 (after one portal recording has saved the monitor choice, no dialog appears) and
 quits; inspect the movie on the Desktop with `ffprobe`.
+`YOUCAM_SNAPSHOT_PROJECT=<project>.youcam.mkv ./youcam --snapshot DIR` also renders the
+Choose After Recording window to `DIR/transparency.png`.
 
 Face detection uses [pico](https://github.com/nenadmarkus/pico) by Nenad
 Markus (MIT license), vendored in `vendor/pico/` with its license.

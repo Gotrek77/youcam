@@ -28,9 +28,12 @@ static const char *HelpText =
     "clipped, and puts the original level back afterwards.\n\n"
     "Show Recording Panel displays optional controls. Hide Camera lets you record just the screen.\n\n"
     "Transparency optionally lets you see through the camera while you work. Adjust it from the "
-    "camera menu; Reset Transparency to 0% turns it off. Check Apply Transparency to Saved Video to "
-    "use the same transparency in your recordings, or leave it unchecked to keep the recorded camera "
-    "opaque. Both choices are remembered.\n\n"
+    "camera menu; Reset Transparency to 0% turns it off. Saved Video chooses what recordings show: "
+    "Same as Preview, Opaque, or Choose After Recording, which opens a window when you stop: pick the "
+    "camera transparency with a preview, then Save the movie to your Desktop, keep it for Later, or "
+    "Discard it. With the YouCam Capture Exclusion extension any value up to 80% is possible; without "
+    "it, up to the preview transparency used while recording. Adjust Last Recording Transparency… "
+    "reopens the last recording kept for later. Both choices are remembered.\n\n"
     "Center Stage (Follow Face) gently pans and zooms the camera to keep your face centred, in "
     "the preview and in recordings. Face detection uses pico by Nenad Markus (MIT license).\n\n"
     "Background (Linux only) removes what is behind you: Transparent shows only you, Blur softens the "
@@ -572,41 +575,66 @@ static void transparency_slider(GtkRange *r, gpointer label) {
     set_transparency(gtk_range_get_value(r) / 100);
 }
 
-/* The toggle must not close the menu: flip it by hand on release. */
-static gboolean toggle_record_transparency(GtkWidget *item, GdkEventButton *ev, gpointer d) {
-    (void)ev; (void)d;
-    GtkCheckMenuItem *check = GTK_CHECK_MENU_ITEM(item);
-    gtk_check_menu_item_set_active(check, !gtk_check_menu_item_get_active(check));
-    Prefs.saved_transparency = gtk_check_menu_item_get_active(check) ? SAVED_PREVIEW : SAVED_OPAQUE;
+static void select_saved_transparency(const char *name) {
+    Prefs.saved_transparency = saved_transparency_parse(name, 0, 0);
     prefs_save();
-    return TRUE;
+}
+
+static void adjust_last_recording(void) {
+    char *dir = project_dir(), *latest = project_latest(dir);
+    if (latest) later_dialog_open(latest);
+    g_free(latest);
+    g_free(dir);
+}
+
+static int has_project(void) {
+    char *dir = project_dir(), *latest = project_latest(dir);
+    int found = latest != NULL;
+    g_free(latest);
+    g_free(dir);
+    return found;
+}
+
+/* Applied when a recording starts, like the Recording Format. */
+static void build_saved_menu(GtkWidget *menu) {
+    static const char *titles[SAVED_COUNT] = {"Same as Preview", "Opaque", "Choose After Recording"};
+    for (int i = 0; i < SAVED_COUNT; i++)
+        add_choice(menu, titles[i], SavedTransparencyNames[i], Prefs.saved_transparency == (saved_transparency)i,
+                   i != SAVED_LATER || export_available(), select_saved_transparency);
+    if (!export_available()) add_item(menu, "Choose After Recording needs FFV1 (gst-libav)", NULL, 0);
 }
 
 static void build_transparency_menu(GtkWidget *menu) {
-    GtkWidget *fixed = gtk_fixed_new();
-    gtk_widget_set_size_request(fixed, 300, 64);
-    GtkWidget *caption = gtk_label_new("Transparency");
-    gtk_label_set_xalign(GTK_LABEL(caption), 0);
-    gtk_widget_set_size_request(caption, 205, 16);
-    gtk_fixed_put(GTK_FIXED(fixed), caption, 14, 9);
-    char text[16];
-    snprintf(text, sizeof(text), "%.0f%%", Prefs.transparency * 100);
-    GtkWidget *value = gtk_label_new(text);
-    gtk_label_set_xalign(GTK_LABEL(value), 1);
-    gtk_widget_set_size_request(value, 60, 16);
-    gtk_fixed_put(GTK_FIXED(fixed), value, 226, 9);
-    GtkWidget *slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, TRANSPARENCY_MAX * 100, 1);
-    gtk_scale_set_draw_value(GTK_SCALE(slider), FALSE);
-    gtk_range_set_value(GTK_RANGE(slider), Prefs.transparency * 100);
-    gtk_widget_set_size_request(slider, 276, 26);
-    atk_object_set_name(gtk_widget_get_accessible(slider), "Camera transparency in percent");
-    g_signal_connect(slider, "value-changed", G_CALLBACK(transparency_slider), value);
-    gtk_fixed_put(GTK_FIXED(fixed), slider, 12, 33);
-    add_slider_item(menu, fixed);
+    char text[64];
+    if (recording_transparency_locked()) {
+        /* The export needs the T_A this recording started with. */
+        snprintf(text, sizeof(text), "Transparency %.0f%% (kept while recording)", Prefs.transparency * 100);
+        add_item(menu, text, NULL, 0);
+    } else {
+        GtkWidget *fixed = gtk_fixed_new();
+        gtk_widget_set_size_request(fixed, 300, 64);
+        GtkWidget *caption = gtk_label_new("Transparency");
+        gtk_label_set_xalign(GTK_LABEL(caption), 0);
+        gtk_widget_set_size_request(caption, 205, 16);
+        gtk_fixed_put(GTK_FIXED(fixed), caption, 14, 9);
+        snprintf(text, sizeof(text), "%.0f%%", Prefs.transparency * 100);
+        GtkWidget *value = gtk_label_new(text);
+        gtk_label_set_xalign(GTK_LABEL(value), 1);
+        gtk_widget_set_size_request(value, 60, 16);
+        gtk_fixed_put(GTK_FIXED(fixed), value, 226, 9);
+        GtkWidget *slider = gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL, 0, TRANSPARENCY_MAX * 100, 1);
+        gtk_scale_set_draw_value(GTK_SCALE(slider), FALSE);
+        gtk_range_set_value(GTK_RANGE(slider), Prefs.transparency * 100);
+        gtk_widget_set_size_request(slider, 276, 26);
+        atk_object_set_name(gtk_widget_get_accessible(slider), "Camera transparency in percent");
+        g_signal_connect(slider, "value-changed", G_CALLBACK(transparency_slider), value);
+        gtk_fixed_put(GTK_FIXED(fixed), slider, 12, 33);
+        add_slider_item(menu, fixed);
+    }
     add_separator(menu);
-    GtkWidget *save = add_check(menu, "Apply Transparency to Saved Video", Prefs.saved_transparency == SAVED_PREVIEW, 0, 1);
-    g_signal_connect(save, "button-release-event", G_CALLBACK(toggle_record_transparency), NULL);
-    add_item(menu, "Reset Transparency to 0%", reset_transparency, 1);
+    build_saved_menu(add_submenu(menu, "Saved Video", 1));
+    add_item(menu, "Adjust Last Recording Transparency…", adjust_last_recording, has_project());
+    add_item(menu, "Reset Transparency to 0%", reset_transparency, !recording_transparency_locked());
 }
 
 /* Linux addition: separates the person from the room. Choosing Image without one picked yet asks for

@@ -14,8 +14,9 @@ First Linux version: a C port (GTK 3 + GStreamer) of the macOS app, kept in
 - Screen recorder: whole screen, a chosen display, or a selected area with
   draggable corner dots; Start, Pause / Resume, Stop; recording panel.
 - Microphone gain slider and live level meter with clipping warning.
-- Camera transparency (upstream PR #2): 0–80% slider, optionally applied to
-  the saved video.
+- Camera transparency (upstream PR #2): 0–80% slider; the saved video is
+  Same as Preview (now the default) or Opaque. The old "Apply Transparency
+  to Saved Video" setting is migrated.
 - Center Stage face tracking (upstream PR #1): pans and zooms to keep the
   face centred, in the preview and in recordings, using vendored pico.
 - Global shortcuts Control–Alt–Super–R (start/stop) and
@@ -41,6 +42,12 @@ First Linux version: a C port (GTK 3 + GStreamer) of the macOS app, kept in
 - **Background** (Off, Transparent, Blur, Image, Color): CPU segmentation
   with MediaPipe Selfie Segmentation converted to plain C, no new runtime
   dependency; applies to the preview and to recordings.
+- **Choose After Recording** (Transparency → Saved Video): the camera layer
+  is recorded on its own lossless track (FFV1) in a project MKV, and when
+  the recording stops a window previews the camera transparency and saves
+  the movie in the chosen format. With the Capture Exclusion extension any
+  value up to 80%, without it up to the preview transparency. **Adjust Last
+  Recording Transparency…** reopens a recording kept for later.
 - `make install` / `make uninstall` (to `~/.local`), `make test`,
   `make smoke-test`, and `--record-test N` for a real N-second recording.
 
