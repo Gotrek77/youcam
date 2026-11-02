@@ -166,8 +166,9 @@ static void add_preview(GtkWidget *box) {
     gtk_range_set_value(GTK_RANGE(D.slider), round(fmin(D.info.preview, max) * 100));
     slider_moved(GTK_RANGE(D.slider), area);   /* The label, also when the value stayed 0. */
     if (D.info.t_a < 1) {
-        char note[160];
-        snprintf(note, sizeof(note), "Up to %.0f%%: enable the YouCam Capture Exclusion extension to choose up to 80%%.",
+        char note[200];
+        snprintf(note, sizeof(note), "Up to %.0f%%, the transparency the camera had on screen while recording.\n"
+                 "With the YouCam Capture Exclusion extension active (log out and back in once) you can choose up to 80%%.",
                  max * 100);
         add_label(box, note);
     }
