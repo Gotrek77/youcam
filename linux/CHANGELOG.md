@@ -15,7 +15,7 @@ First Linux version: a C port (GTK 3 + GStreamer) of the macOS app, kept in
   draggable corner dots; Start, Pause / Resume, Stop; recording panel.
 - Microphone gain slider and live level meter with clipping warning.
 - Camera transparency (upstream PR #2): 0–80% slider; the saved video is
-  Same as Preview (now the default) or Opaque. The old "Apply Transparency
+  Same as Preview or Opaque (the default). The old "Apply Transparency
   to Saved Video" setting is migrated.
 - Center Stage face tracking (upstream PR #1): pans and zooms to keep the
   face centred, in the preview and in recordings, using vendored pico.

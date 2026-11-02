@@ -54,7 +54,7 @@ need. `make uninstall` removes everything `make install` added.
 - **Transparency** optionally makes the camera see-through so you can see
   what it covers. Adjust the slider from 0% to 80%, or choose **Reset
   Transparency to 0%** to turn it off. **Saved Video** chooses what
-  recordings show: **Same as Preview** (default), **Opaque**, or (Linux
+  recordings show: **Same as Preview**, **Opaque** (default), or (Linux
   only) **Choose After Recording**: when you stop, a window shows a frame of
   the recording and a slider for the camera transparency of the saved
   movie; **Save** writes it to the Desktop in the Recording Format,
@@ -65,7 +65,9 @@ need. `make uninstall` removes everything `make install` added.
   recording, which then stays fixed until you stop. Unfinished recordings
   wait in `~/.local/share/youcam/pending/` (playable MKV files, also after
   a crash). It needs the FFV1 codec from gst-libav. Both choices are
-  remembered, and slider changes apply immediately, including during recording.
+  remembered, and slider changes apply immediately, also during recording,
+  except in a Choose After Recording recording without the extension, where
+  the transparency stays fixed as described above.
 - **Center Stage (Follow Face)** gently pans and zooms the camera to keep
   your face centred, in the preview and in recordings. It is on by default
   and remembered.
