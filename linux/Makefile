@@ -11,7 +11,7 @@ LDLIBS := $(shell pkg-config --libs $(PKGS)) -lm
 CORE := geometry.o support.o prefs.o camera_layer.o center_stage.o picornt.o mutter_cast.o mic_level.o segment.o background.o
 MEDIA := writer.o audio.o export.o
 APP := main.o app.o overlay.o panel.o region.o area_overlay.o statusicon.o \
-       recording.o portal.o hotkeys.o camera.o $(MEDIA) $(CORE)
+       recording.o portal.o hotkeys.o camera.o later_dialog.o $(MEDIA) $(CORE)
 ICON_SIZES := 16 32 48 128 256 512
 
 .PHONY: all test bench-segment smoke-test install uninstall clean

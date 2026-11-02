@@ -363,6 +363,8 @@ void recording_init(void (*on_change)(void), void (*on_error)(const char *));
 recording_phase recording_phase_now(void);
 const char *recording_status(void);
 const char *recording_last_path(void);
+void recording_set_last_path(const char *path);
+const char *recording_output_dir(void);   /* The Desktop, else the home folder. */
 const char *recording_target_monitor(void);
 void recording_start(GdkMonitor *monitor, const rect *local);
 void recording_toggle_pause(void);
@@ -459,6 +461,12 @@ void segment_input_size(const segment_model *m, int *w, int *h);
 /* rgb: packed 8-bit RGB at the input size; mask: person confidence 0...1, input size.
  * One caller at a time: the worker threads are shared by all models. */
 void segment_run(segment_model *m, const guint8 *rgb, float *mask);
+
+/* ------------------------------------------------------- later_dialog.c --- */
+
+void later_dialog_open(const char *project);
+GtkWidget *later_dialog_window(void);   /* NULL when closed. */
+void later_dialog_shutdown(void);
 
 /* --------------------------------------------------------------- app.c --- */
 

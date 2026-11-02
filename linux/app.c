@@ -826,6 +826,7 @@ static gboolean take_snapshot(gpointer data) {
     (void)data;
     render(App.cam, "camera.png");
     render(App.panel, "panel.png");
+    if (later_dialog_window()) render(later_dialog_window(), "transparency.png");
     GtkWidget *menu = app_build_menu();   /* Exercise the full menu too. */
     g_print("menu: %d items\n", (int)g_list_length(gtk_container_get_children(GTK_CONTAINER(menu))));
     gtk_widget_destroy(menu);
@@ -836,6 +837,8 @@ static gboolean take_snapshot(gpointer data) {
 void app_snapshot(const char *dir) {
     SnapshotDir = g_strdup(dir);
     app_toggle_panel();
+    const char *project = g_getenv("YOUCAM_SNAPSHOT_PROJECT");   /* Developer check of the stop dialog. */
+    if (project) later_dialog_open(project);
     g_timeout_add_seconds(4, take_snapshot, NULL);
 }
 
@@ -895,6 +898,7 @@ void app_quit(void) {
     }
     if (App.save_timer) save_now(NULL);
     region_cancel();
+    later_dialog_shutdown();   /* A running export is cancelled; the project stays. */
     area_overlay_hide();
     hotkeys_shutdown();
     audio_shutdown();

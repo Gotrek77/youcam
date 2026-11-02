@@ -37,6 +37,12 @@ static void changed(void) { if (R.on_change) R.on_change(); }
 
 recording_phase recording_phase_now(void) { return R.phase; }
 const char *recording_last_path(void) { return R.last_path; }
+
+/* A movie finished elsewhere (the Choose After Recording export). */
+void recording_set_last_path(const char *path) {
+    prefs_set_string(&R.last_path, path);
+    changed();
+}
 const char *recording_target_monitor(void) { return R.monitor; }
 
 const char *recording_status(void) {
@@ -105,7 +111,7 @@ static void movie_failed(const char *message, void *ud) {
     report(message);
 }
 
-static const char *recordings_dir(void) {
+const char *recording_output_dir(void) {
     const char *desktop = g_get_user_special_dir(G_USER_DIRECTORY_DESKTOP);
     return desktop && g_file_test(desktop, G_FILE_TEST_IS_DIR) ? desktop : g_get_home_dir();
 }
@@ -158,7 +164,7 @@ static void screen_ready(int fd, guint32 node, const char *token, const char *se
             return;
         }
     }
-    char *path = recording_next_path(recordings_dir(), time(NULL), Prefs.container);
+    char *path = recording_next_path(recording_output_dir(), time(NULL), Prefs.container);
     char *video = fd >= 0
         ? g_strdup_printf("pipewiresrc fd=%d path=%u do-timestamp=true always-copy=true keepalive-time=1000", fd, node)
         : g_strdup_printf("pipewiresrc path=%u do-timestamp=true always-copy=true keepalive-time=1000", node);
