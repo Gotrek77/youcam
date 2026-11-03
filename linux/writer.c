@@ -32,7 +32,7 @@ struct writer {
     GstPad *camera_pad;         /* Its compositor pad. */
     GstElement *outsize;        /* Pins the compositor output to the screen size. */
     int camera_w, camera_h;
-    gint screen_seen;           /* The screen reached the compositor (atomic). */
+    gint screen_seen;           /* The first screen buffer went by (atomic). */
 };
 
 /* The movie size is the cropped stream size, known once caps flow. */
@@ -65,8 +65,6 @@ static GstPadProbeReturn size_probe(GstPad *pad, GstPadProbeInfo *info, gpointer
     return GST_PAD_PROBE_OK;
 }
 
-/* A live compositor starts on its timeout, before PipeWire delivers the
- * screen, and would open the movie with frames of its black background. */
 static GstPadProbeReturn screen_arrived(GstPad *pad, GstPadProbeInfo *info, gpointer data) {
     (void)pad; (void)info;
     g_atomic_int_set(&((writer *)data)->screen_seen, 1);
@@ -341,7 +339,7 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
         "%s ! videoconvert ! videocrop name=crop ! videorate ! video/x-raw,framerate=30/1 ! %s"
         "%s ! h264parse ! queue ! mux. %s%s%s name=mux ! filesink name=file",
         video_source, composite, video_encoder_chain(), track, audio,
-        layer == WRITER_LAYER_TRACK ? "matroskamux" : container_for(ext)->muxer);
+        container_for(layer == WRITER_LAYER_TRACK ? "mkv" : ext)->muxer);
     GstElement *p = gst_parse_launch(desc, err);
     g_free(desc);
     g_free(audio);

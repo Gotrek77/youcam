@@ -333,7 +333,7 @@ int main(int argc, char **argv) {
            "a finished project also carries its settings in the MKV comment tag");
     g_free(comment);
     gst_discoverer_info_unref(info);
-    EXPECT(fabs(project_s - PROJECT_S) < 1, "project duration %.2fs", project_s);
+    EXPECT(fabs(project_s - PROJECT_S) < 0.5, "project duration %.2fs", project_s);
     EXPECT(LayerFrames > 60, "camera layer frames were pushed (%d)", LayerFrames);
     EXPECT(project_read_info(ProjectPath, &back) && back.t_a == 0.5 && back.preview == 0.5 &&
            strcmp(back.container, "mov") == 0 && back.has_audio, "a finished project is read back");
@@ -349,6 +349,8 @@ int main(int argc, char **argv) {
     char *movie = export_project(&project, 0, dir);
     pixel_at(movie, 45, CX, CY, rgb);
     EXPECT(rgb[0] > 200 && rgb[1] < 60 && rgb[2] < 60, "t = 0 shows the opaque camera (%u %u %u)", rgb[0], rgb[1], rgb[2]);
+    pixel_at(movie, 45, SQUARE_X / 2, SQUARE_Y / 2, rgb);   /* The layer keeps its alpha: clear off the camera. */
+    EXPECT(rgb[0] < 60 && rgb[1] < 60 && rgb[2] > 200, "t = 0 shows the screen off the camera (%u %u %u)", rgb[0], rgb[1], rgb[2]);
     g_unlink(movie);
     g_free(movie);
     movie = export_project(&project, project.t_a, dir);
