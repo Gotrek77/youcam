@@ -15,7 +15,7 @@ const guint8 *background_model_bytes(seg_variant v, size_t *size) {
 const char *const BackgroundNames[BG_COUNT] = {"off", "transparent", "blur", "image", "color"};
 const char *const BackgroundTitles[BG_COUNT] = {"Off", "Transparent", "Blur", "Image", "Color"};
 
-#define MASK_SMOOTHING 0.6   /* Weight of the newest mask: lower is steadier, higher follows faster. */
+#define MASK_SMOOTHING 0.8   /* Weight of the newest mask: lower is steadier, higher follows faster. */
 #define EDGE_LOW 0.35        /* Model alpha at or below this is background (the halo)... */
 #define EDGE_HIGH 0.75       /* ...at or above this the person; smoothstep in between. */
 #define BLUR_FACTOR 16       /* The blurred background is computed this many times smaller... */
