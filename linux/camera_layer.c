@@ -60,17 +60,13 @@ void camera_layer_draw(cairo_t *cr, camera_layer l, int cx, int cy, const camera
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
     cairo_translate(cr, -cx, -cy);
     rect r = {l.frame.x - HALO_PX, l.frame.y - HALO_PX, l.frame.w + 2 * HALO_PX, l.frame.h + 2 * HALO_PX};
-    if (bg && bg->mode == BG_TRANSPARENT) {
-        cairo_rectangle(cr, r.x, r.y, r.w, r.h);   /* The person is the shape. */
-    } else {
-        double rad = fmin(l.radius + HALO_PX, fmin(r.w, r.h) / 2);
-        cairo_new_sub_path(cr);
-        cairo_arc(cr, r.x + r.w - rad, r.y + rad, rad, -M_PI / 2, 0);
-        cairo_arc(cr, r.x + r.w - rad, r.y + r.h - rad, rad, 0, M_PI / 2);
-        cairo_arc(cr, r.x + rad, r.y + r.h - rad, rad, M_PI / 2, M_PI);
-        cairo_arc(cr, r.x + rad, r.y + rad, rad, M_PI, 3 * M_PI / 2);
-        cairo_close_path(cr);
-    }
+    double rad = fmin(l.radius + HALO_PX, fmin(r.w, r.h) / 2);   /* Transparent too: the chosen shape. */
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, r.x + r.w - rad, r.y + rad, rad, -M_PI / 2, 0);
+    cairo_arc(cr, r.x + r.w - rad, r.y + r.h - rad, rad, 0, M_PI / 2);
+    cairo_arc(cr, r.x + rad, r.y + r.h - rad, rad, M_PI / 2, M_PI);
+    cairo_arc(cr, r.x + rad, r.y + rad, rad, M_PI, 3 * M_PI / 2);
+    cairo_close_path(cr);
     cairo_clip(cr);
     cairo_translate(cr, r.x, r.y);
     camera_paint_frame(cr, f, r.w, r.h, mirrored, t, bg);

@@ -144,9 +144,9 @@ static gboolean on_draw(GtkWidget *widget, cairo_t *cr, gpointer data) {
     int message = camera_message(&title, &detail);
     const camera_frame *f = message ? NULL : camera_current_frame();
     const background_layer *bg = f ? background_now(f) : NULL;
-    if (!bg || bg->mode != BG_TRANSPARENT) {   /* Transparent: the person is the shape. */
-        shape_path(cr, w, h);
-        cairo_clip(cr);
+    shape_path(cr, w, h);   /* Transparent too: the person stays inside the chosen shape. */
+    cairo_clip(cr);
+    if (!bg || bg->mode != BG_TRANSPARENT) {
         cairo_set_source_rgb(cr, 0.09, 0.09, 0.09);
         cairo_paint(cr);
     }
