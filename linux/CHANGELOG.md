@@ -42,6 +42,8 @@ First Linux version: a C port (GTK 3 + GStreamer) of the macOS app, kept in
 - **Background** (Off, Transparent, Blur, Image, Color): CPU segmentation
   with MediaPipe Selfie Segmentation converted to plain C, no new runtime
   dependency; applies to the preview and to recordings.
+  **Learn Empty Room…** removes furniture the model mistakes for you by
+  comparing with a picture of the room without you, kept per camera.
 - **Choose After Recording** (Transparency → Saved Video): the camera layer
   is recorded on its own lossless track (FFV1) in a project MKV, and when
   the recording stops a window previews the camera transparency and saves

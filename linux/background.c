@@ -1,8 +1,10 @@
 /* Background removal: the mode names, image helpers, the segmentation
  * worker thread and the layers camera_layer.c paints. */
 
+#include <errno.h>
 #include <math.h>
 #include <string.h>
+#include <glib/gstdio.h>
 #include "youcam.h"
 #include "selfie_landscape.h"
 #include "selfie_square.h"
@@ -20,6 +22,12 @@ const char *const BackgroundTitles[BG_COUNT] = {"Off", "Transparent", "Blur", "I
 #define EDGE_HIGH 0.75       /* ...at or above this the person; smoothstep in between. */
 #define BLUR_FACTOR 16       /* The blurred background is computed this many times smaller... */
 #define BLUR_RADIUS 2        /* ...with a box blur of this radius, then scaled up smoothly. */
+#define ROOM_MATCH_LOW 10.0  /* RGB distance to the empty room at or below this: room, even if the model says person... */
+#define ROOM_MATCH_HIGH 20.0 /* ...at or above this the model decides; linear in between. Wider eats faces over dark TVs. */
+#define ROOM_SURE_BELOW 0.05 /* Model alpha under this is sure room: it measures the exposure change since learning. */
+#define ROOM_GAIN_MIN 0.5    /* An exposure change outside these is not believed. */
+#define ROOM_GAIN_MAX 2.0
+#define ROOM_LEARN_FRAMES 15 /* Model frames averaged into the empty room (~1 s). */
 #define IMAGE_MAX_SIDE 1280  /* A background image is kept at most this long: a camera sized window. */
 
 background_mode background_mode_parse(const char *name) {
@@ -72,6 +80,27 @@ void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous) {
         double v = fmin(fmax(raw[i], 0), 1) * 255;
         if (has_previous) v = MASK_SMOOTHING * v + (1 - MASK_SMOOTHING) * mask[i];
         mask[i] = (guint8)lround(v);
+    }
+}
+
+/* Furniture the model is sure is you (a white cabinet beside a white shirt)
+ * looks the same as in the learned empty room: those pixels lose alpha.
+ * The room is scaled per channel by the exposure change measured where the
+ * model is sure there is no one. */
+void mask_remove_room(float *raw, const guint8 *rgb, const guint8 *room, int n) {
+    double now[3] = {0}, then[3] = {0}, gain[3];
+    for (int i = 0; i < n; i++)
+        if (raw[i] < ROOM_SURE_BELOW)
+            for (int c = 0; c < 3; c++) { now[c] += rgb[3 * i + c]; then[c] += room[3 * i + c]; }
+    for (int c = 0; c < 3; c++) gain[c] = then[c] > 0 ? fmin(fmax(now[c] / then[c], ROOM_GAIN_MIN), ROOM_GAIN_MAX) : 1;
+    for (int i = 0; i < n; i++) {
+        double d2 = 0;
+        for (int c = 0; c < 3; c++) {
+            double e = rgb[3 * i + c] - room[3 * i + c] * gain[c];
+            d2 += e * e;
+        }
+        double t = (sqrt(d2) - ROOM_MATCH_LOW) / (ROOM_MATCH_HIGH - ROOM_MATCH_LOW);
+        raw[i] *= (float)fmin(fmax(t, 0), 1);
     }
 }
 
@@ -161,6 +190,7 @@ GdkPixbuf *background_image_fit(GdkPixbuf *image) {
 #define SEG_MAX_INPUT (256 * 256 * 3)
 
 typedef struct { guint8 *mask; int w, h; } published_mask;
+typedef enum { ROOM_KEEP, ROOM_RELOAD, ROOM_LEARN } room_request;
 
 static struct {
     GMutex lock;
@@ -168,6 +198,9 @@ static struct {
     GThread *thread;
     int quit, pending;            /* pending: input holds a frame the worker is running. */
     seg_variant variant;
+    char *camera;                 /* Whose empty room applies; set by the main thread. */
+    room_request room;            /* Main thread asks, the worker clears. */
+    background_room_done room_done;
     guint8 input[SEG_MAX_INPUT];
     int available;                /* -1 not checked yet. */
     int model_w[SEG_VARIANTS], model_h[SEG_VARIANTS];
@@ -213,18 +246,110 @@ static gboolean deliver_mask(gpointer data) {
     return G_SOURCE_REMOVE;
 }
 
+/* ------------------------------------------------------- empty room --- */
+
+/* One PNG per camera at model size; NULL camera means no file. */
+static char *room_path(const char *camera) {
+    if (!camera) return NULL;
+    char *sum = g_compute_checksum_for_string(G_CHECKSUM_SHA1, camera, -1);
+    char *name = g_strdup_printf("room-%s.png", sum);
+    char *path = g_build_filename(g_get_user_data_dir(), "youcam", name, NULL);
+    g_free(sum);
+    g_free(name);
+    return path;
+}
+
+static void room_save(const char *camera, const guint8 *rgb, int w, int h) {
+    char *path = room_path(camera);
+    if (!path) return;
+    char *dir = g_path_get_dirname(path);
+    GError *err = NULL;
+    GdkPixbuf *p = gdk_pixbuf_new_from_data(rgb, GDK_COLORSPACE_RGB, FALSE, 8, w, h, w * 3, NULL, NULL);
+    if (g_mkdir_with_parents(dir, 0700) != 0 || !gdk_pixbuf_save(p, path, "png", &err, NULL)) {
+        g_printerr("youcam: cannot save the empty room to %s: %s\n", path, err ? err->message : g_strerror(errno));
+        g_clear_error(&err);
+    }
+    g_object_unref(p);
+    g_free(dir);
+    g_free(path);
+}
+
+/* Packed RGB, or NULL when none was learned or it was for another camera shape. */
+static guint8 *room_load(const char *camera, int w, int h) {
+    char *path = room_path(camera);
+    GdkPixbuf *p = path && g_file_test(path, G_FILE_TEST_EXISTS) ? gdk_pixbuf_new_from_file(path, NULL) : NULL;
+    guint8 *rgb = NULL;
+    if (p && gdk_pixbuf_get_width(p) == w && gdk_pixbuf_get_height(p) == h && gdk_pixbuf_get_n_channels(p) == 3) {
+        rgb = g_malloc((size_t)w * h * 3);
+        const guint8 *px = gdk_pixbuf_read_pixels(p);
+        for (int y = 0; y < h; y++)
+            memcpy(rgb + (size_t)y * w * 3, px + (size_t)y * gdk_pixbuf_get_rowstride(p), (size_t)w * 3);
+    } else if (p) {
+        g_printerr("youcam: ignoring the empty room in %s, learned for another camera shape\n", path);
+    }
+    if (p) g_object_unref(p);
+    g_free(path);
+    return rgb;
+}
+
+static gboolean room_learned(gpointer unused) {
+    (void)unused;
+    background_room_done done = B.room_done;
+    B.room_done = NULL;
+    if (done) done();
+    return G_SOURCE_REMOVE;
+}
+
+void background_set_camera(const char *name) {
+    g_mutex_lock(&B.lock);
+    if (g_strcmp0(name, B.camera) != 0) {
+        prefs_set_string(&B.camera, name);
+        B.room = ROOM_RELOAD;
+    }
+    g_mutex_unlock(&B.lock);
+}
+
+void background_learn_room(background_room_done done) {
+    B.room_done = done;
+    g_mutex_lock(&B.lock);
+    B.room = ROOM_LEARN;
+    g_mutex_unlock(&B.lock);
+}
+
+int background_has_room(void) {
+    char *path = room_path(B.camera);
+    int has = path && g_file_test(path, G_FILE_TEST_EXISTS);
+    g_free(path);
+    return has;
+}
+
+void background_forget_room(void) {
+    char *path = room_path(B.camera);
+    if (path && g_remove(path) != 0 && errno != ENOENT)
+        g_printerr("youcam: cannot remove %s: %s\n", path, g_strerror(errno));
+    g_free(path);
+    g_mutex_lock(&B.lock);
+    B.room = ROOM_RELOAD;
+    g_mutex_unlock(&B.lock);
+}
+
 /* Runs the model on the latest frame the camera thread left in B.input. */
 static gpointer worker(gpointer unused) {
     (void)unused;
     segment_model *model = NULL;
     int loaded = -1, has_previous = 0, n = 0, load_failed = 0;
     float *raw = NULL;
-    guint8 *smoothed = NULL;
+    guint8 *smoothed = NULL, *room = NULL;
+    double *learn = NULL;
+    int learned = 0, room_loaded = 0;
     g_mutex_lock(&B.lock);
     for (;;) {
         while (!B.pending && !B.quit) g_cond_wait(&B.wake, &B.lock);
         if (B.quit) break;
         seg_variant v = B.variant;
+        room_request request = B.room;
+        B.room = ROOM_KEEP;
+        char *camera = g_strdup(B.camera);
         g_mutex_unlock(&B.lock);
         if ((int)v != loaded) {   /* First frame, or the camera changed shape. */
             size_t size;
@@ -246,8 +371,35 @@ static gpointer worker(gpointer unused) {
             n = B.model_w[v] * B.model_h[v];
             raw = g_renew(float, raw, n);
             smoothed = g_renew(guint8, smoothed, n);
+            room_loaded = 0;
+            learned = 0;   /* A half learned room of the old shape is dropped. */
         }
+        int mw = B.model_w[v], mh = B.model_h[v];
+        if (request == ROOM_LEARN) {
+            learn = g_renew(double, learn, (size_t)3 * n);
+            memset(learn, 0, sizeof(double) * 3 * (size_t)n);
+            learned = 1;
+        } else if (learned) {
+            learned++;
+        }
+        if (learned) {
+            for (int i = 0; i < 3 * n; i++) learn[i] += B.input[i];
+            if (learned == ROOM_LEARN_FRAMES) {
+                room = g_renew(guint8, room, (size_t)3 * n);
+                for (int i = 0; i < 3 * n; i++) room[i] = (guint8)lround(learn[i] / learned);
+                room_save(camera, room, mw, mh);
+                learned = 0;
+                room_loaded = 1;
+                g_idle_add(room_learned, NULL);
+            }
+        } else if (request == ROOM_RELOAD || !room_loaded) {
+            g_clear_pointer(&room, g_free);
+            room = room_load(camera, mw, mh);
+            room_loaded = 1;
+        }
+        g_free(camera);
         segment_run(model, B.input, raw);
+        if (room && !learned) mask_remove_room(raw, B.input, room, n);
         mask_smooth(smoothed, raw, n, has_previous);
         has_previous = 1;
         published_mask *p = g_new(published_mask, 1);
@@ -260,6 +412,8 @@ static gpointer worker(gpointer unused) {
     segment_free(model);
     g_free(raw);
     g_free(smoothed);
+    g_free(room);
+    g_free(learn);
     return NULL;
 }
 

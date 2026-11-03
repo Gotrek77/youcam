@@ -74,7 +74,10 @@ need. `make uninstall` removes everything `make install` added.
 - **Background** (Linux only) separates you from the room: **Transparent**
   shows only you (the shape no longer applies), **Blur** softens the
   background, **Image** puts a picture of your choice behind you, **Color** a
-  solid color. **Choose Image…** and **Choose Color…** pick them. It runs on
+  solid color. **Choose Image…** and **Choose Color…** pick them. If
+  furniture next to you stays visible, **Learn Empty Room…** shows YouCam
+  the room without you (step out during the countdown); it is kept per
+  camera until **Forget Empty Room**. It runs on
   the CPU with no extra software, in the preview and in recordings, and is
   off by default. `make bench-segment` shows how fast your CPU runs it.
 - **Show Recording Panel** opens optional controls. **Hide Camera** lets you

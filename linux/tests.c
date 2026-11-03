@@ -466,6 +466,14 @@ static void test_background(void) {
     EXPECT(mask_edge(0) == 0 && mask_edge(80) == 0 && mask_edge(200) == 255 && mask_edge(255) == 255 &&
            mask_edge(140) > 80 && mask_edge(140) < 200 && mask_edge(130) < mask_edge(150),
            "The edge curve clears a faint halo, keeps the person and stays smooth in between");
+
+    /* Pixels: 0 sure room, 1 cabinet the model calls person, 2 the person. The camera is 20% brighter than when learned. */
+    guint8 room[9] = {100, 100, 100, 200, 200, 200, 50, 50, 50};
+    guint8 now[9] = {120, 120, 120, 240, 240, 240, 200, 150, 120};
+    float alpha[3] = {0, 0.99f, 0.99f};
+    mask_remove_room(alpha, now, room, 3);
+    EXPECT(alpha[0] == 0 && alpha[1] == 0 && near(alpha[2], 0.99f),
+           "Furniture matching the empty room is cleared, the person kept, exposure changes allowed for");
     g_free(person.data);
 
     guint8 gray[64 * 32 * 4];

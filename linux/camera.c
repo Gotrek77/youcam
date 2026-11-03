@@ -154,6 +154,7 @@ static void start_selected(void) {
 
     C.pipeline = p;
     C.configured = g_strdup(C.selected);
+    background_set_camera(C.selected);
     set_state(CAMERA_STARTING, NULL);
     if (gst_element_set_state(p, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         stop_pipeline(1);

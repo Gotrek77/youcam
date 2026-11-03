@@ -211,6 +211,12 @@ typedef struct {
     double rgb[3];            /* BG_COLOR. */
 } background_layer;
 
+void mask_remove_room(float *raw, const guint8 *rgb, const guint8 *room, int n);   /* Clears furniture matching the empty room. */
+typedef void (*background_room_done)(void);
+void background_set_camera(const char *name);         /* Main thread: whose empty room applies. */
+void background_learn_room(background_room_done done); /* Next ~1 s of frames become the empty room; done on the main thread. */
+int background_has_room(void);                         /* The current camera has a learned empty room. */
+void background_forget_room(void);
 int background_available(void);                      /* Both models load (checked once). */
 void background_apply_prefs(void);                   /* Starts or stops the worker for Prefs.background_mode. */
 void background_feed(const guint8 *bgrx, int w, int h, int stride);   /* Camera thread. */

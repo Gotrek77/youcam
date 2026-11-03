@@ -37,7 +37,8 @@ static const char *HelpText =
     "Center Stage (Follow Face) gently pans and zooms the camera to keep your face centred, in "
     "the preview and in recordings. Face detection uses pico by Nenad Markus (MIT license).\n\n"
     "Background (Linux only) removes what is behind you: Transparent shows only you, Blur softens the "
-    "room, Image and Color replace it. It runs on your computer and applies to recordings too.";
+    "room, Image and Color replace it. It runs on your computer and applies to recordings too. If "
+    "furniture next to you stays visible, Learn Empty Room shows YouCam the room without you.";
 
 static struct {
     GtkApplication *gapp;
@@ -688,6 +689,57 @@ static void select_background(const char *name) {
     else set_background(mode);
 }
 
+/* Furniture the model mistakes for you goes away once YouCam has seen the room without you. */
+#define LEARN_ROOM_DELAY_S 3   /* Time to step out of view before the room is learned. */
+
+/* The countdown window: shows the seconds left, then waits for the worker; Cancel closes it. */
+static struct { GtkWidget *dialog; guint timer; int left; } Learn;
+
+static void close_countdown(void) {
+    if (Learn.timer) g_source_remove(Learn.timer);
+    Learn.timer = 0;
+    g_clear_pointer(&Learn.dialog, gtk_widget_destroy);
+}
+
+static void room_learned(void) {
+    if (!Learn.dialog) return;   /* Cancelled: the room is still saved, just not announced. */
+    close_countdown();
+    app_show_message("Empty room learned", "You can come back now.", GTK_MESSAGE_INFO);
+}
+
+static gboolean countdown_tick(gpointer unused) {
+    (void)unused;
+    if (--Learn.left > 0) {
+        gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(Learn.dialog), "%d", Learn.left);
+        return G_SOURCE_CONTINUE;
+    }
+    Learn.timer = 0;
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(Learn.dialog), "Looking at the empty room…");
+    background_learn_room(room_learned);
+    return G_SOURCE_REMOVE;
+}
+
+static void learn_room(void) {
+    GtkWidget *ask = gtk_message_dialog_new(NULL, 0, GTK_MESSAGE_QUESTION, GTK_BUTTONS_OK_CANCEL, "%s",
+        "After OK, step out of the camera view before the countdown ends. YouCam then looks at the "
+        "empty room for about a second and tells you when you can come back.\n\n"
+        "Keep the camera still afterwards; learn again if it moves or the light changes a lot.");
+    int ok = gtk_dialog_run(GTK_DIALOG(ask)) == GTK_RESPONSE_OK;
+    gtk_widget_destroy(ask);
+    if (!ok || Learn.dialog) return;
+    Learn.left = LEARN_ROOM_DELAY_S;
+    Learn.dialog = gtk_message_dialog_new(NULL, 0, GTK_MESSAGE_INFO, GTK_BUTTONS_CANCEL, "Step out of view");
+    gtk_message_dialog_format_secondary_text(GTK_MESSAGE_DIALOG(Learn.dialog), "%d", Learn.left);
+    gtk_window_set_keep_above(GTK_WINDOW(Learn.dialog), TRUE);
+    g_signal_connect(Learn.dialog, "response", G_CALLBACK(close_countdown), NULL);
+    gtk_widget_show(Learn.dialog);
+    Learn.timer = g_timeout_add_seconds(1, countdown_tick, NULL);
+}
+
+static void forget_room(void) {
+    background_forget_room();
+}
+
 static void build_background_menu(GtkWidget *menu) {
     if (!background_available()) {
         add_item(menu, "Background removal unavailable", NULL, 0);
@@ -699,6 +751,10 @@ static void build_background_menu(GtkWidget *menu) {
     add_separator(menu);
     add_item(menu, "Choose Image…", choose_background_image, 1);
     add_item(menu, "Choose Color…", choose_background_color, 1);
+    add_separator(menu);
+    int on = Prefs.background_mode != BG_OFF;
+    add_item(menu, "Learn Empty Room…", learn_room, on);
+    add_item(menu, "Forget Empty Room", forget_room, on && background_has_room());
 }
 
 static void toggle_mirror(void) {
