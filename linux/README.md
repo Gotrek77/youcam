@@ -14,14 +14,51 @@ KDE or another desktop with a ScreenCast portal). Optional: the bad plugins
 and WirePlumber's `wpctl` for Automatic Microphone Level; without them those
 features are skipped.
 
+Building also needs a C compiler, `make`, `pkg-config`, `xxd` and the
+development files of GTK 3 and GStreamer (with gst-plugins-base). For
+example:
+
+```sh
+sudo apt install build-essential pkgconf xxd libgtk-3-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev     # Debian, Ubuntu
+sudo dnf install gcc make pkgconf-pkg-config /usr/bin/xxd gtk3-devel \
+    gstreamer1-devel gstreamer1-plugins-base-devel           # Fedora
+sudo pacman -S --needed base-devel xxd gtk3 gst-plugins-base # Arch
+```
+
 ```sh
 make
-make install      # ~/.local: binary, icons, desktop entry, Shell extension
+make check        # logic and segmentation tests; make test adds the media pipeline
+make install      # ~/.local: binary, man page, icons, desktop entry, Shell extension
 youcam
 ```
 
 The desktop entry gives the portal an app id, which the global shortcuts
 need. `make uninstall` removes everything `make install` added.
+`make install PREFIX=/usr DESTDIR=<dir>` installs into a staging directory,
+as packages do. `man youcam` lists options, environment and files.
+
+## Packages
+
+The Makefile builds a native package for the distribution it runs on
+(`make rpm` and `make arch` package the committed sources through `make
+dist`, so commit changes first):
+
+```sh
+make deb          # Debian, Ubuntu: ../youcam_<version>_<arch>.deb (dpkg-buildpackage)
+make rpm          # Fedora: rpmbuild/RPMS/<arch>/youcam-<version>-1.<dist>.<arch>.rpm
+make arch         # Arch: youcam-<version>-1-<arch>.pkg.tar.zst (makepkg)
+make dist         # youcam-<version>.tar.gz, the source archive the rpm and arch targets use
+```
+
+Each needs that distribution's tools (`dpkg-dev` and `debhelper`,
+`rpm-build`, or `base-devel`) and the build dependencies above;
+`apt build-dep ./` and `dnf builddep packaging/youcam.spec` install them.
+The recipes are in `debian/` and `packaging/`; packages run `make check`
+while building. Install the result with the system package manager, for
+example `sudo apt install ../youcam_1.0~beta1_amd64.deb`. On Fedora the
+H.264 and AAC encoders (gstreamer1-plugins-ugly, gstreamer1-plugin-libav)
+come from RPM Fusion.
 
 ## Use
 

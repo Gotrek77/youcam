@@ -50,8 +50,12 @@ First Linux version: a C port (GTK 3 + GStreamer) of the macOS app, kept in
   the movie in the chosen format. With the Capture Exclusion extension any
   value up to 80%, without it up to the preview transparency. **Adjust Last
   Recording Transparency…** reopens a recording kept for later.
-- `make install` / `make uninstall` (to `~/.local`), `make test`,
-  `make smoke-test`, and `--record-test N` for a real N-second recording.
+- `make install` / `make uninstall` (to `~/.local`, or `PREFIX`/`DESTDIR`),
+  `make check`, `make test`, `make smoke-test`, and `--record-test N` for a
+  real N-second recording.
+- Packages: `make deb`, `make rpm` and `make arch` build native Debian/Ubuntu,
+  Fedora and Arch packages (recipes in `debian/` and `packaging/`), checked
+  with lintian and rpmlint; a `youcam(1)` man page.
 
 ### Fixes since the first build
 
