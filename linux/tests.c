@@ -461,8 +461,11 @@ static void test_background(void) {
     guint8 half[2] = {255, 0};
     mask_compose(&f, half, 2, 1, &person);
     EXPECT(person.width == 4 && person.data[3] == 255 && person.data[15] == 0, "The mask becomes alpha");
-    EXPECT(person.data[7] == 191 && person.data[11] == 64 && person.data[4] == 191,
-           "Alpha is interpolated and colors premultiplied");
+    EXPECT(person.data[7] == 255 && person.data[11] == 0 && person.data[4] == 255,
+           "Interpolated alpha goes through the edge curve, colors premultiplied");
+    EXPECT(mask_edge(0) == 0 && mask_edge(80) == 0 && mask_edge(200) == 255 && mask_edge(255) == 255 &&
+           mask_edge(140) > 80 && mask_edge(140) < 200 && mask_edge(130) < mask_edge(150),
+           "The edge curve clears a faint halo, keeps the person and stays smooth in between");
     g_free(person.data);
 
     guint8 gray[64 * 32 * 4];

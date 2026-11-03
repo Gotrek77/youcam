@@ -16,6 +16,8 @@ const char *const BackgroundNames[BG_COUNT] = {"off", "transparent", "blur", "im
 const char *const BackgroundTitles[BG_COUNT] = {"Off", "Transparent", "Blur", "Image", "Color"};
 
 #define MASK_SMOOTHING 0.6   /* Weight of the newest mask: lower is steadier, higher follows faster. */
+#define EDGE_LOW 0.35        /* Model alpha at or below this is background (the halo)... */
+#define EDGE_HIGH 0.75       /* ...at or above this the person; smoothstep in between. */
 #define BLUR_FACTOR 16       /* The blurred background is computed this many times smaller... */
 #define BLUR_RADIUS 2        /* ...with a box blur of this radius, then scaled up smoothly. */
 #define IMAGE_MAX_SIDE 1280  /* A background image is kept at most this long: a camera sized window. */
@@ -73,6 +75,21 @@ void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous) {
     }
 }
 
+/* The upscaled model edge is a wide soft band where the room shows through:
+ * a smoothstep narrows it to a clean, still antialiased edge. */
+guint8 mask_edge(guint8 alpha) {
+    static guint8 lut[256];
+    static gsize ready;
+    if (g_once_init_enter(&ready)) {
+        for (int i = 0; i < 256; i++) {
+            double t = fmin(fmax((i / 255.0 - EDGE_LOW) / (EDGE_HIGH - EDGE_LOW), 0), 1);
+            lut[i] = (guint8)lround(t * t * (3 - 2 * t) * 255);
+        }
+        g_once_init_leave(&ready, 1);
+    }
+    return lut[alpha];
+}
+
 /* The camera frame with the mask (bilinear, half-pixel centers) as alpha:
  * premultiplied ARGB32, the person surface painted over the backdrop.
  * Plain per-pixel float math costs ~2-4 ms at 720p; the x taps could be
@@ -90,7 +107,7 @@ void mask_compose(const camera_frame *f, const guint8 *mask, int mw, int mh, cam
             int x0 = MIN((int)mx, mw - 1), x1 = MIN(x0 + 1, mw - 1);
             double fx = mx - x0;
             double top = r0[x0] + (r0[x1] - r0[x0]) * fx, bottom = r1[x0] + (r1[x1] - r1[x0]) * fx;
-            unsigned a = (unsigned)lround(top + (bottom - top) * fy);
+            unsigned a = mask_edge((guint8)lround(top + (bottom - top) * fy));
             for (int c = 0; c < 3; c++) o[c] = (guint8)((p[c] * a + 127) / 255);
             o[3] = (guint8)a;
         }

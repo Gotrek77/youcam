@@ -198,6 +198,7 @@ int background_color_parse(const char *text, double rgb[3]);          /* "#rrggb
 void frame_to_model(const guint8 *bgrx, int w, int h, int stride, guint8 *rgb, int mw, int mh);
 void mask_smooth(guint8 *mask, const float *raw, int n, int has_previous);
 void mask_compose(const camera_frame *f, const guint8 *mask, int mw, int mh, camera_frame *out);
+guint8 mask_edge(guint8 alpha);   /* Tightens the soft model edge: halo gone, person kept. */
 void blur_small(const camera_frame *f, camera_frame *out);
 GdkPixbuf *background_image_fit(GdkPixbuf *image);   /* New ref: upright, longer side capped. */
 
