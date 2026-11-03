@@ -346,6 +346,12 @@ writer *writer_start(const char *path, const char *video_source, GstElement *mic
     g_free(desc);
     g_free(audio);
     if (!p) return NULL;
+    /* pipewiresrc offers its own clock and the pipeline picks it, but with
+     * that clock a resume does not subtract the pause: the layer and audio
+     * jumped by the whole pause while videorate filled the screen track. */
+    GstClock *clock = gst_system_clock_obtain();
+    gst_pipeline_use_clock(GST_PIPELINE(p), clock);
+    gst_object_unref(clock);
 
     if (mic) {
         GstElement *convert = gst_bin_get_by_name(GST_BIN(p), "aconvert");
